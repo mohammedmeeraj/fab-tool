@@ -1590,7 +1590,7 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         units=int(self.unit_le.text())
         assembly_time_for_one_rsrc=self.assemb_time*2
         assembly_time=round((assembly_time_for_one_rsrc/assembly_resources)*units,1)
-        self.assembly_time_label.setText(f"{assembly_time} hours")
+        self.assembly_time_label.setText(f":{assembly_time} hours")
     
     def plot_machine_usage(self, type):
         self.canvas2.axes2 = self.canvas2.fig.add_subplot(222)
@@ -1771,10 +1771,10 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
             total_time_bpc=0
         self.total_units_label.setText(f"{self.unit_le.text()} units")
 
-        self.basic_label_text.setText(f"{total_time_b} hours") 
-        self.basic_cnc_label_text.setText(f"{total_time_bc} hours")
-        self.basic_punch_label_2.setText(f"{total_time_bp} hours")
-        self.basic_punch_cnc_label_2.setText(f"{total_time_bpc} hours")
+        self.basic_label_text.setText(f":{total_time_b} hours") 
+        self.basic_cnc_label_text.setText(f":{total_time_bc} hours")
+        self.basic_punch_label_2.setText(f":{total_time_bp} hours")
+        self.basic_punch_cnc_label_2.setText(f":{total_time_bpc} hours")
 
 
     def load_bp_charts(self):
