@@ -1,0 +1,8 @@
+<RCC>
+  <qresource prefix="newPrefix">
+    <file>icons/print.png</file>
+    <file>icons/2b (2).png</file>
+    <file>icons/Schueco_Logo_RGB_Black.png</file>
+  </qresource>
+  <qresource prefix="newPrefix"/>
+</RCC>

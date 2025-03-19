@@ -1,0 +1,14 @@
+report_window=reports.ReportWindow(self.unitLineEdit.text(),'basic',machine_label,machine_time)
+machine_label,machine_time=self.get_time_by_single_machine("basic")
+def get_time_by_single_machine(self,type):
+        t=self.time_taken_by_machine[type]
+        machine_labels=list(self.time_taken_by_machine[type].keys())
+        machine_time=list(self.time_taken_by_machine[type].values())
+        print("The ",machine_time)
+        time_values=[]
+        for i in range(len(machine_time)):
+            time=round(machine_time[i]/60,2)
+            time_values.append(time)
+        print("The machine labels are  ",machine_labels)
+        print("The time taken is ",time_values)
+        return machine_labels,time_values
