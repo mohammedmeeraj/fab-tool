@@ -1312,9 +1312,6 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         
 
-
-        
-        
     def plot_data(self, machining_type,data=None,labels=None):
         """Plot initial or updated data"""
         
@@ -1407,9 +1404,7 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         self.plot_time_consumption("basic")
         self.plot_idle_hours("basic")
         self.total_assembly_time()
-        
-
-
+      
     def plot_idle_hours(self,type):
         units=int(self.unit_le.text())
         assembly_resources=int(self.assmb_res_le.text())
@@ -1759,7 +1754,18 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         return machines,time
     
     def total_assembly_time(self):
-        self.assembly_units_label.setText(f"{self.unit_le.text()} units")
+        try:
+            u=int(self.unit_le.text())
+        except Exception as e:
+            u=7
+        
+        
+        if u>1:
+            self.assembly_units_label.setText(f"{self.unit_le.text()} units")
+        else:
+            self.assembly_units_label.setText(f"{self.unit_le.text()} unit")
+
+
         assembly_resources=int(self.assmb_res_le.text())
         units=int(self.unit_le.text())
         assembly_time_for_one_rsrc=self.assemb_time*2
@@ -1830,6 +1836,7 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
 
 
         # self.canvas2.fig.tight_layout()  # Improve spacing
+    
     
 
     def plot_time_consumption(self,type):
@@ -1920,7 +1927,6 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         self.plot_idle_hours("basic+cnc")
         self.total_assembly_time()
 
-
     def total_machining_time(self):
         try:
             total_time=self.get_total_time()
@@ -1943,7 +1949,15 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
             total_time_bc=0
             total_time_bp=0
             total_time_bpc=0
-        self.total_units_label.setText(f"{self.unit_le.text()} units")
+        try:
+            u=int(self.unit_le.text())
+        except Exception:
+            u=7
+        if u>1:
+            self.total_units_label.setText(f"{self.unit_le.text()} units")
+        else:
+            self.total_units_label.setText(f"{self.unit_le.text()} unit")
+
 
         self.basic_label_text.setText(f":{total_time_b} hours") 
         self.basic_cnc_label_text.setText(f":{total_time_bc} hours")
@@ -2026,8 +2040,6 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         self.total_assembly_time()
 
 
-
-
     def clear_data(self,machining_table,assembly_table,handling_table,installation_table):
         pyqt_path=os.path.join(os.path.dirname(PyQt6.__file__),"Qt6","plugins")
         print(pyqt_path)
@@ -2088,10 +2100,6 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         self.machining_table.cellWidget(3,13).setText("")
     
 
-
-
-
-        
     def set_combo_to_table_cell(self):
         combo=self.get_combo()
         combo.addItems(["45°","90°","45°-90°"])
@@ -2162,20 +2170,7 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         # self.assembly_table.setCellWidget(4,1,combo)
 
 
-
-
-
-
-
-        
-
-
-
-        
-
-
-
-        
+       
 
     def get_text_item(self,text):
         item=QTableWidgetItem(text)
@@ -2254,7 +2249,6 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
             print("Total hours before conversion ",time_taken)
             total_time=self.convert_to_hours(time_taken)
             print("Total hours after conversion ",total_time)
-
             self.machining_time_le.setText(f":{total_time} hours")
     
 
@@ -2336,8 +2330,6 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
                                 time_taken_by_machine[item_text]+=time_for_multiple_op
 
         self.set_machining_time("basic+cnc",time_taken_by_machine)
-
-
         print("Time taken by basic+cnc in secs is ",time_taken," ",time_taken_by_machine)
         
     def cal_punch_time(self,type,row0,row1,row3):
