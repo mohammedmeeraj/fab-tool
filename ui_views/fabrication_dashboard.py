@@ -2096,8 +2096,8 @@ QFrame{
                 if isinstance(cell_widget,QComboBox):
                     if cell_widget.count()>0:
                         cell_widget.setCurrentIndex(0)
-                # if row==machining_table.rowCount()-1 and col>=1:
-                if row==3 and col>=1:
+                if row==machining_table.rowCount()-1 and col>=1:
+                # if row==3 and col>=1:
                     item=machining_table.item(row,col)
                     if item:
                         item.setText("")
@@ -2137,7 +2137,7 @@ QFrame{
         #             item=installation_table.item(row,col)
         #             if item:
         #                 item.setText("0 minutes")
-        self.machining_table.cellWidget(3,13).setText("")
+        self.machining_table.cellWidget(7,13).setText("")
     
 
     def set_combo_to_table_cell(self):
@@ -2158,7 +2158,7 @@ QFrame{
         combo.addItems(["⌀6","⌀8","⌀10","⌀12","⌀14","⌀16"])
         self.machining_table.setCellWidget(0,13,combo)
         combo=self.get_combo()
-        combo.addItems(["1Hsaw","2Hsaw"])
+        combo.addItems(["2Hsaw","1Hsaw"])
         self.machining_table.setCellWidget(1,1,combo)
         for i in range(7):
             combo=self.get_combo()
@@ -2237,7 +2237,7 @@ QFrame{
         self.machining_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.machining_table.verticalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
     def cal_machining_assemb_handling_install(self):
-        self.calculate_fabrication_time(0,1,3)
+        self.calculate_fabrication_time(0,1,7)
         self.append_mins()
         self.append_hours()
         self.calculate_assembly_time()
