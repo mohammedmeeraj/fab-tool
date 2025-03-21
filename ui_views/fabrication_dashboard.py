@@ -54,7 +54,8 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         self.data_for_calculation()
         self.isDataFilled=False
         self.btn_calculate.clicked.connect(self.cal_machining_assemb_handling_install)
-        self.btn_clear.clicked.connect(lambda:self.clear_data(self.machining_table,self.assembly_table,self.handling_table,self.installation_table))
+        # self.btn_clear.clicked.connect(lambda:self.clear_data(self.machining_table,self.assembly_table,self.handling_table,self.installation_table))
+        self.btn_clear.clicked.connect(lambda:self.clear_data(self.machining_table,self.assembly_table,self.handling_table))
         self.btn_save.clicked.connect(lambda:self.save_system_data(1))
         self.load_saved_systems()
         self.populate_type_combo()
@@ -82,6 +83,7 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         self.recommendation_btn.clicked.connect(self.switch_to_recommendation_page)
         self.current_type_image()
         self.set_line_edits_to_cells()
+        self.set_line_edits_to_machining_table()
         self.print_results_btn.clicked.connect(self.save_as_image)
         self.print_lp_btn.clicked.connect(self.save_as_image_lp)
         # self.machining_table.cellClicked.connect(lambda row,col:(self.remove_placeholder(row,col),self.restore_placeholder(row,col)))
@@ -96,6 +98,23 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         self.assmb_res_le.setValidator(validator_2)
         self.read_only_row()
         self.set_default_machine_count()
+        self.frame.setStyleSheet("""
+QFrame{
+                                 border:1px solid #000;
+                                 padding:4px;
+                                 
+                                 
+                                 
+                                 }
+                                 QLabel{
+                                 border:1px solid #ccc;
+                                 
+                                 }
+
+
+
+
+""")
 
         # self.apply_shadow()
         # You can now access UI elements defined in the .ui file
@@ -396,11 +415,14 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         self.set_line_edit_to_cell_2(self.assembly_table,4,1)
         self.set_line_edit_to_cell(self.handling_table,0,1)
         self.set_line_edit_to_cell(self.handling_table,1,1)
-        self.set_line_edit_to_cell(self.installation_table,0,1)
-        self.set_line_edit_to_cell(self.installation_table,1,1)
+        self.set_line_edit_to_cell(self.handling_table,2,1)
+        self.set_line_edit_to_cell(self.handling_table,3,1)
+        self.set_line_edit_to_cell(self.assembly_table,5,1)
+        # self.set_line_edit_to_cell(self.installation_table,0,1)
+        # self.set_line_edit_to_cell(self.installation_table,1,1)
 
     def append_mins(self):
-        for line_edit in [self.assembly_table.cellWidget(2,1),self.assembly_table.cellWidget(3,1),self.handling_table.cellWidget(0,1),self.handling_table.cellWidget(1,1),self.installation_table.cellWidget(0,1),self.installation_table.cellWidget(1,1),self.assembly_table.cellWidget(0,1),self.assembly_table.cellWidget(1,1)]:
+        for line_edit in [self.assembly_table.cellWidget(2,1),self.assembly_table.cellWidget(3,1),self.assembly_table.cellWidget(5,1),self.handling_table.cellWidget(0,1),self.handling_table.cellWidget(1,1),self.handling_table.cellWidget(2,1),self.handling_table.cellWidget(3,1),self.assembly_table.cellWidget(0,1),self.assembly_table.cellWidget(1,1)]:
             text=line_edit.text().strip()
             if text and not text.endswith("mins"):
                 line_edit.setText(f"{text} mins")
@@ -418,14 +440,19 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         line_edit = QtWidgets.QLineEdit()
         line_edit.setPlaceholderText("In mm")  # Set Placeholder
         self.machining_table.setCellWidget(3, 13, line_edit)
+        # self.machining_table.setCellWidget(4, 13, line_edit)
+        # self.machining_table.setCellWidget(5, 13, line_edit)
+        # self.machining_table.setCellWidget(6, 13, line_edit)
+        # self.machining_table.setCellWidget(7, 13, line_edit)
+        # self.machining_table.setCellWidget(8, 13, line_edit)
 
         
 
-    def remove_placeholder(self,row,col):
-        item=self.machining_table.item(row,col)
-        if item and item.text()=='In mm':
-            item.setText("")
-            item.setForeground(QColor("black"))
+    # def remove_placeholder(self,row,col):
+    #     item=self.machining_table.item(row,col)
+    #     if item and item.text()=='In mm':
+    #         item.setText("")
+    #         item.setForeground(QColor("black"))
             
     def restore_placeholder(self,row,col):
         if row!=3 and col!=13:
@@ -622,7 +649,7 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         self.machining_time_le.setText(system_data[4])
         self.assembly_time_le.setText(system_data[6])
         self.handling_time_le.setText(system_data[7])
-        self.installation_time_le.setText(system_data[5])
+        # self.installation_time_le.setText(system_data[5])
         self.total_time_le.setText(system_data[8])
         self.size_le_inp.setText(system_data[2])
         self.size_le.setText(system_data[2])
@@ -705,24 +732,24 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
 
 
 
-        cursor.execute("SELECT row_num, col1 FROM installation_data WHERE user_id=%s AND system_id=%s", 
-               (user_id, system_id))
-        for row_data in cursor.fetchall():
-            row,col1=row_data
-            col_values=[col1]
-            for col_offset, value in enumerate(col_values,start=1):
-                col=col_offset
-                cell_widget=self.installation_table.cellWidget(row,col)
-                if cell_widget and isinstance(cell_widget,QComboBox):
-                    index=cell_widget.findText(value)
-                    if index>=0:
-                        cell_widget.setCurrentIndex(index)
-                elif cell_widget and isinstance(cell_widget,QLineEdit):
-                    cell_widget.setText(value)
-                else:
-                    if not self.installation_table.item(row,col):
-                        self.installation_table.setItem(row,col,QTableWidgetItem())
-                    self.installation_table.item(row,col).setText(value)
+        # cursor.execute("SELECT row_num, col1 FROM installation_data WHERE user_id=%s AND system_id=%s", 
+        #        (user_id, system_id))
+        # for row_data in cursor.fetchall():
+        #     row,col1=row_data
+        #     col_values=[col1]
+        #     for col_offset, value in enumerate(col_values,start=1):
+        #         col=col_offset
+        #         cell_widget=self.installation_table.cellWidget(row,col)
+        #         if cell_widget and isinstance(cell_widget,QComboBox):
+        #             index=cell_widget.findText(value)
+        #             if index>=0:
+        #                 cell_widget.setCurrentIndex(index)
+        #         elif cell_widget and isinstance(cell_widget,QLineEdit):
+        #             cell_widget.setText(value)
+        #         else:
+        #             if not self.installation_table.item(row,col):
+        #                 self.installation_table.setItem(row,col,QTableWidgetItem())
+        #             self.installation_table.item(row,col).setText(value)
         
 
 
@@ -741,6 +768,17 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         line_edit.setPlaceholderText("hrs")
         table.setCellWidget(row,col,line_edit)
         table.cellWidget(row,col).setText(val)
+
+    def set_line_edits_to_machining_table(self):
+        for i in range(4,self.machining_table.rowCount()):
+            line_edit=QLineEdit()
+            line_edit.setPlaceholderText("In mm")  # Set Placeholder
+            self.machining_table.setCellWidget(i, 13, line_edit)
+
+
+
+
+            
         
         
 
@@ -781,7 +819,7 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
             type=self.type_combo_inp.currentText()
             size=self.size_le_inp.text().strip()
             machining_time = self.machining_time_le.text()
-            installation_time = self.installation_time_le.text()
+            # installation_time = self.installation_time_le.text()
             assembly_time = self.assembly_time_le.text()
             handling_time = self.handling_time_le.text()
             total_time = self.total_time_le.text()  
@@ -792,7 +830,7 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
             count=cursor.fetchone()[0]
 
 
-            def update_system(system_name,user_id,type,size,machining_time,installation_time,assembly_time,handling_time,total_time,cursor):
+            def update_system(system_name,user_id,type,size,machining_time,assembly_time,handling_time,total_time,cursor):
                  # Step 1: Get the existing system_id
                  cursor.execute("SELECT id FROM saved_systems WHERE system_name = %s AND user_id = %s", (system_name, user_id))
                  result = cursor.fetchone()
@@ -801,15 +839,15 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
                      #step 2: update the saved system table
                      cursor.execute("""
             UPDATE saved_systems 
-            SET type = %s, size = %s, machining_time = %s, installation_time = %s, 
+            SET type = %s, size = %s, machining_time = %s, 
                 assembly_time = %s, handling_time = %s, total_time = %s
             WHERE system_name = %s AND user_id = %s
-        """, (type, size, machining_time, installation_time, assembly_time, handling_time, total_time, system_name, user_id))
+        """, (type, size, machining_time, assembly_time, handling_time, total_time, system_name, user_id))
                     #  Step 3: Delete old machining, assembly, handling, and installation data for this system
                      cursor.execute("DELETE FROM machining_data WHERE system_id = %s", (system_id,))
                      cursor.execute("DELETE FROM assembly_data WHERE system_id = %s", (system_id,))
                      cursor.execute("DELETE FROM handling_data WHERE system_id = %s", (system_id,))
-                     cursor.execute("DELETE FROM installation_data WHERE system_id = %s", (system_id,))
+                    #  cursor.execute("DELETE FROM installation_data WHERE system_id = %s", (system_id,))
 
 
 
@@ -817,7 +855,7 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
                 result=QMessageBox.question(self,"System Exists",f"The system '{system_name}' already exists.Do you want to replace it?",QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No)
                 if result==QMessageBox.StandardButton.Yes:
 
-                    update_system(system_name,user_id,type,size,machining_time,installation_time,assembly_time,handling_time,total_time,cursor)
+                    update_system(system_name,user_id,type,size,machining_time,assembly_time,handling_time,total_time,cursor)
                     flag=True
                     
                 else:
@@ -833,9 +871,9 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         # """, (user_id, system_name,type,size, machining_time, installation_time, assembly_time, handling_time, total_time))
             if not flag:
                 cursor.execute("""
-            INSERT INTO saved_systems (user_id, system_name,type,size, machining_time, installation_time, assembly_time, handling_time, total_time)
-            VALUES (%s, %s, %s, %s, %s, %s, %s,%s,%s)
-        """, (user_id, system_name,type,size, machining_time, installation_time, assembly_time, handling_time, total_time))
+            INSERT INTO saved_systems (user_id, system_name,type,size, machining_time, assembly_time, handling_time, total_time)
+            VALUES (%s, %s, %s, %s, %s, %s,%s,%s)
+        """, (user_id, system_name,type,size, machining_time, assembly_time, handling_time, total_time))
 
 
             cursor.execute("SELECT id FROM saved_systems WHERE system_name = %s AND user_id = %s", (system_name, user_id))
@@ -900,21 +938,21 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
                 cursor.execute("INSERT INTO handling_data (user_id, system_id, row_num, col1) VALUES (%s, %s, %s, %s)", 
         (user_id, system_id, row, *row_data_2))
                 #save installation data
-            for row in range(self.installation_table.rowCount()):
-                row_data_2=[]
-                for col in range(1,2):
-                    item=self.installation_table.item(row,col)
-                    cell_widget=self.installation_table.cellWidget(row,col)
-                    if cell_widget and isinstance(cell_widget,QComboBox):
-                        row_data_2.append(cell_widget.currentText())
-                    elif cell_widget and isinstance(cell_widget,QLineEdit):
-                        row_data_2.append(cell_widget.text())
-                    elif item:
-                        row_data_2.append(item.text())
-                    else:
-                        row_data_2.append("")
-                cursor.execute("INSERT INTO installation_data (user_id, system_id, row_num, col1) VALUES (%s, %s, %s, %s)", 
-        (user_id, system_id, row, *row_data_2))
+        #     for row in range(self.installation_table.rowCount()):
+        #         row_data_2=[]
+        #         for col in range(1,2):
+        #             item=self.installation_table.item(row,col)
+        #             cell_widget=self.installation_table.cellWidget(row,col)
+        #             if cell_widget and isinstance(cell_widget,QComboBox):
+        #                 row_data_2.append(cell_widget.currentText())
+        #             elif cell_widget and isinstance(cell_widget,QLineEdit):
+        #                 row_data_2.append(cell_widget.text())
+        #             elif item:
+        #                 row_data_2.append(item.text())
+        #             else:
+        #                 row_data_2.append("")
+        #         cursor.execute("INSERT INTO installation_data (user_id, system_id, row_num, col1) VALUES (%s, %s, %s, %s)", 
+        # (user_id, system_id, row, *row_data_2))
 
             
 
@@ -1305,11 +1343,11 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
                 item=self.handling_table.item(row,col)
                 if item:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        for row in range(self.installation_table.rowCount()):
-            for col in range(self.installation_table.columnCount()):
-                item=self.installation_table.item(row,col)
-                if item:
-                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        # for row in range(self.installation_table.rowCount()):
+        #     for col in range(self.installation_table.columnCount()):
+        #         item=self.installation_table.item(row,col)
+        #         if item:
+        #             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         
 
     def plot_data(self, machining_type,data=None,labels=None):
@@ -2040,24 +2078,26 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         self.total_assembly_time()
 
 
-    def clear_data(self,machining_table,assembly_table,handling_table,installation_table):
-        pyqt_path=os.path.join(os.path.dirname(PyQt6.__file__),"Qt6","plugins")
-        print(pyqt_path)
+    def clear_data(self,machining_table,assembly_table,handling_table):
+        # pyqt_path=os.path.join(os.path.dirname(PyQt6.__file__),"Qt6","plugins")
+        # print(pyqt_path)
         self.isDataFilled=False
         self.machining_time_le.setText("0")
         self.assembly_time_le.setText("0")
         self.handling_time_le.setText("0")
-        self.installation_time_le.setText("0")
+        # self.installation_time_le.setText("0")
         self.total_time_le.setText("0")
-        self.curing_time_le.setText("0")
-        self.setup_time_le.setText("0")
+        self.total_time_le_2.setText("0")
+        # self.curing_time_le.setText("0")
+        # self.setup_time_le.setText("0")
         for row in range(machining_table.rowCount()):
             for col in range(machining_table.columnCount()):
                 cell_widget=machining_table.cellWidget(row,col)
                 if isinstance(cell_widget,QComboBox):
                     if cell_widget.count()>0:
                         cell_widget.setCurrentIndex(0)
-                if row==machining_table.rowCount()-1 and col>=1:
+                # if row==machining_table.rowCount()-1 and col>=1:
+                if row==3 and col>=1:
                     item=machining_table.item(row,col)
                     if item:
                         item.setText("")
@@ -2085,18 +2125,18 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
                     item=handling_table.item(row,col)
                     if item:
                         item.setText("0 minutes")
-        for row in range(installation_table.rowCount()):
-            for col in range(installation_table.columnCount()):
-                cell_widget=installation_table.cellWidget(row,col)
-                if isinstance(cell_widget,QComboBox):
-                    if cell_widget.count()>0:
-                        cell_widget.setCurrentIndex(0)
-                elif isinstance(cell_widget,QLineEdit):
-                    cell_widget.setText("")
-                if col>=1:
-                    item=installation_table.item(row,col)
-                    if item:
-                        item.setText("0 minutes")
+        # for row in range(installation_table.rowCount()):
+        #     for col in range(installation_table.columnCount()):
+        #         cell_widget=installation_table.cellWidget(row,col)
+        #         if isinstance(cell_widget,QComboBox):
+        #             if cell_widget.count()>0:
+        #                 cell_widget.setCurrentIndex(0)
+        #         elif isinstance(cell_widget,QLineEdit):
+        #             cell_widget.setText("")
+        #         if col>=1:
+        #             item=installation_table.item(row,col)
+        #             if item:
+        #                 item.setText("0 minutes")
         self.machining_table.cellWidget(3,13).setText("")
     
 
@@ -2193,7 +2233,7 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
     def stretch_table_columns(self):
         self.assembly_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.handling_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.installation_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        # self.installation_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.machining_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.machining_table.verticalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
     def cal_machining_assemb_handling_install(self):
@@ -2202,7 +2242,7 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         self.append_hours()
         self.calculate_assembly_time()
         self.calculate_handling_time()
-        self.calculate_installation_time()
+        # self.calculate_installation_time()
         self.total_time()
     # code to calculate fabrication time
     def calculate_fabrication_time(self,row0,row1,row3):
@@ -2241,15 +2281,15 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
             print("Total seconds ",time_taken)
             time_taken=round(time_taken/60,1)
             print("Total minutes ",time_taken)
-            self.machining_time_le.setText(f":{time_taken} mins")
+            self.machining_time_le.setText(f"{time_taken} mins")
         else:
-            self.machining_time_le.setText(f":{time_taken} seconds")
+            self.machining_time_le.setText(f"{time_taken} seconds")
         if time_taken>60:
             time_taken=round(time_taken/60,2)
             print("Total hours before conversion ",time_taken)
             total_time=self.convert_to_hours(time_taken)
             print("Total hours after conversion ",total_time)
-            self.machining_time_le.setText(f":{total_time} hours")
+            self.machining_time_le.setText(f"{total_time} hours")
     
 
     def cal_basic_time(self,type,row0,row1,row3):
@@ -2523,12 +2563,15 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         glass_gazing=self.string_to_value("min",glass_g)
         curing_t=self.assembly_table.cellWidget(4,1).text().strip().lower().replace(" ","")
         curing_time=self.string_to_value("hour",curing_t)*60
-        if curing_time>60:
-            ct=round((curing_time/60),2)
-            curring=self.convert_to_hours(ct)
-            self.curing_time_le.setText(f":{curring} hours")
-        else:
-            self.curing_time_le.setText(f":{curing_time} mins")
+        # isomat_t=self.assembly_table.cellWidget(5,1).text().strip().lower().replace(" ","")
+        
+
+        # if curing_time>60:
+        #     ct=round((curing_time/60),2)
+        #     curring=self.convert_to_hours(ct)
+        #     self.curing_time_le.setText(f":{curring} hours")
+        # else:
+        #     self.curing_time_le.setText(f":{curing_time} mins")
         # self.curing_time_le.setText(f"{curing_time}")
         total_time=outer_frame_assm+vent_frame_assm+fitting_hardw+glass_gazing
         self.time_for_unit_cal=total_time
@@ -2537,16 +2580,16 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
             total_time=round((total_time/60),2)
             self.assemb_time=self.convert_to_hours_return_float(total_time)
             total_time=self.convert_to_hours(total_time)
-            self.assembly_time_le.setText(f":{total_time} hours")
+            self.assembly_time_le.setText(f"{total_time} hours")
         else:
-            self.assembly_time_le.setText(f":{total_time} mins")
+            self.assembly_time_le.setText(f"{total_time} mins")
             t=round((total_time/60),2)
             self.assemb_time=self.convert_to_hours_return_float(t)
 
 
     def calculate_installation_time(self):
-        outer_f=self.installation_table.cellWidget(0,1).text().strip().lower().replace(" ","")
-        vent_f=self.installation_table.cellWidget(1,1).text().strip().lower().replace(" ","")
+        outer_f=self.handling_table.cellWidget(2,1).text().strip().lower().replace(" ","")
+        vent_f=self.handling_table.cellWidget(3,1).text().strip().lower().replace(" ","")
         outer_frame=self.string_to_value("min",outer_f)
         vent_frame=self.string_to_value("min",vent_f)
 
@@ -2567,12 +2610,12 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         material_handling=self.string_to_value("min",material_h)
         machine_setup=self.string_to_value("min",machine_set)
         total_time=material_handling
-        if machine_setup>60:
-            st=round((machine_setup/60),2)
-            set_u=self.convert_to_hours(st)
-            self.setup_time_le.setText(f":{set_u} hours")
-        else:
-            self.setup_time_le.setText(f":{machine_setup} mins")
+        # if machine_setup>60:
+        #     st=round((machine_setup/60),2)
+        #     set_u=self.convert_to_hours(st)
+        #     self.setup_time_le.setText(f":{set_u} hours")
+        # else:
+        #     self.setup_time_le.setText(f":{machine_setup} mins")
         
         self.handling_time=total_time
         self.setup_time=machine_setup
@@ -2580,24 +2623,40 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         if total_time>60:
             total_time=round((total_time/60),2)
             total_time=self.convert_to_hours(total_time)
-            self.handling_time_le.setText(f":{total_time} hours")
+            self.handling_time_le.setText(f"{total_time} hours")
         else:
-            self.handling_time_le.setText(f":{total_time} mins")
+            self.handling_time_le.setText(f"{total_time} mins")
         self.h=f"{t}"
 
     def total_time(self):
         machining_time=float(self.f)
         assembly_time=float(self.a)
         handling_time=float(self.h)
-        total_time_mins = machining_time + assembly_time + handling_time 
+        total_time_mins = machining_time + assembly_time + handling_time
+        curing_t=self.assembly_table.cellWidget(4,1).text().strip().lower().replace(" ","")
+        curing_time=self.string_to_value("hour",curing_t)*60
+        isomat_t=self.assembly_table.cellWidget(5,1).text().strip().lower().replace(" ","")
+        isomat_t=self.string_to_value("min",isomat_t)
+    
+        
+
+        total_time_mins_2=machining_time+assembly_time+handling_time+curing_time+isomat_t
         if total_time_mins>60:
             t=round(total_time_mins/60,2)
             total_time=self.convert_to_hours(t)
-            txt=f":{total_time} hours"
+            txt=f"{total_time} hours"
             self.total_time_le.setText(txt)
         else:
-            txt=f":{total_time_mins} mins"
+            txt=f"{total_time_mins} mins"
             self.total_time_le.setText(txt)
+        if total_time_mins_2>60:
+            t=round(total_time_mins_2/60,2)
+            total_time=self.convert_to_hours(t)
+            txt=f"{total_time} hours"
+            self.total_time_le_2.setText(txt)
+        else:
+            txt=f"{total_time_mins_2} mins"
+            self.total_time_le_2.setText(txt)
 
     def get_units_per_week(self):
         assembly_resources=int(self.assmb_res_le.text())
