@@ -1,8 +1,8 @@
 from PyQt6 import QtWidgets,QtGui,QtCore
 from ui.py.fabrication_dashboard_dialog import Ui_MainWindow  # Import the generated UI class
-from PyQt6.QtGui import QColor,QPainter,QPixmap,QPageLayout
+from PyQt6.QtGui import QColor,QPainter,QPixmap,QPageLayout,QBackingStore,QRegion
 from PyQt6.QtWidgets import QGraphicsDropShadowEffect,QHeaderView,QTableWidgetItem,QComboBox,QMessageBox,QVBoxLayout,QLineEdit,QFileDialog
-from PyQt6.QtCore import Qt,QRegularExpression,QSize
+from PyQt6.QtCore import Qt,QRegularExpression,QSize,QRect
 import PyQt6,textwrap
 from PyQt6.QtPrintSupport import QPrinter
 import re,mysql.connector,random,os,sys,mplcursors
@@ -10,7 +10,7 @@ from .db_pool import DatabasePool
 from mysql.connector import pooling
 from .delete_system import DeleteSystem
 from PyQt6.QtGui import QIntValidator,QRegularExpressionValidator,QPageSize
-
+import matplotlib.cm as cm
 # import plotly.express as px   
 # from PyQt6.QtWebEngineWidgets import QWebEngineView
 from .line_production import MplCanvas
@@ -19,18 +19,17 @@ import squarify,mplcursors
 from matplotlib.widgets import Cursor
 from .idle_hours import MplCanvasIdle
 import matplotlib.pyplot as plt
+from abc import ABC, abstractmethod
+from functools import lru_cache
+import copy
+
+from .constants import *
 
 import numpy as np
-def convert_to_hours_return_float(val):
-        v=float(val)
-        # if val>60:
-        #     v=round((val/60),2)
-        hours=int(v)
-        mins=round((v-hours)*60)
-        a=f"{hours}.{mins}"
-        print("a = ",a)
-        return float(a)
+
+
 class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
+    
     def __init__(self, parent=None):
         super(MyApp, self).__init__(parent)
         self.setupUi(self)  # Set up the UI
@@ -39,16 +38,19 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         self.home_btn.clicked.connect(self.switch_to_homePage)
         self.line_production_btn.clicked.connect(self.switch_to_lineProductionPage)
         self.result_btn.clicked.connect(self.switch_to_resultsPage)
+        self.factory_layout_btn.clicked.connect(self.switch_to_factoryPage)
         self.data_inp_btn.setChecked(True)
         self.stackedWidget.setCurrentIndex(0)
         self.machining_table.horizontalHeader().setVisible(True)
         self.apply_shadow([self.widget_7,self.widget_8])
         # self.apply_shadow([self.company_logo])
-        self.add_placeholder_machining_table()
+        # self.add_placeholder_machining_table()
         self.set_section_size_table(50)
         self.stretch_table_columns()
+        self.machining_table.hideRow(0)
         # self.create_db_pool()
         self.time_taken_by_machine={}
+        self.original_machine_times = {}
         self.set_combo_to_table_cell()
         self.get_combo()
         self.data_for_calculation()
@@ -56,14 +58,19 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         self.btn_calculate.clicked.connect(self.cal_machining_assemb_handling_install)
         # self.btn_clear.clicked.connect(lambda:self.clear_data(self.machining_table,self.assembly_table,self.handling_table,self.installation_table))
         self.btn_clear.clicked.connect(lambda:self.clear_data(self.machining_table,self.assembly_table,self.handling_table))
+        # self.btn_clear.clicked.connect(self.print_to_a3)
+        self.btn_print_data_inp.clicked.connect(self.print_to_a3)
         self.btn_save.clicked.connect(lambda:self.save_system_data(1))
         self.load_saved_systems()
         self.populate_type_combo()
         self.load_saved_type()
         self.fab_res_le.setDisabled(True)
+        self.set_line_edits_to_machining_table()
+
         self.saved_system_combo.currentIndexChanged.connect(lambda:self.load_system_data(1))
         self.remove_sys_btn.clicked.connect(self.show_dialog)
         self.basic_btn.clicked.connect(self.load_b_charts)
+        self.btn_print_analysis.clicked.connect(self.print_to_a3)
         # self.basic_btn.clicked.connect(self.change_app_color)
         self.basic_cnc_btn.clicked.connect(self.load_bc_charts)
         # self.basic_cnc_btn.clicked.connect(self.print_me)
@@ -83,9 +90,13 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         self.recommendation_btn.clicked.connect(self.switch_to_recommendation_page)
         self.current_type_image()
         self.set_line_edits_to_cells()
-        self.set_line_edits_to_machining_table()
-        self.print_results_btn.clicked.connect(self.save_as_image)
-        self.print_lp_btn.clicked.connect(self.save_as_image_lp)
+        free_hand_milling_com = self.machining_table.cellWidget(1,13)
+        free_hand_milling_com.currentIndexChanged.connect(self.handle_line_edits)
+        
+        # self.print_results_btn.clicked.connect(self.save_as_image)
+        self.print_results_btn.clicked.connect(self.print_to_a3)
+        # self.print_lp_btn.clicked.connect(self.save_as_image_lp)
+        self.print_lp_btn.clicked.connect(self.print_to_a3)
         # self.machining_table.cellClicked.connect(lambda row,col:(self.remove_placeholder(row,col),self.restore_placeholder(row,col)))
         # self.machining_table.cellClicked.connect(self.restore_placeholder)
         self.min_units=0
@@ -116,70 +127,83 @@ QFrame{
 
 """)
 
-        # self.apply_shadow()
-        # You can now access UI elements defined in the .ui file
-        # For example, if you have a button with the objectName 'myButton':
-        # self.myButton.clicked.connect(self.handle_button_click)
-    # def save_as_image(self):
-    #     printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-    #     printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
-    #     printer.setPageOrientation(QtGui.QPageLayout.Orientation.Landscape)
-    #     printer.setPageSize(QPrinter.PaperSize.A4)
+        WindowIcon(self).set_icon()
+        CompanyLogoIcon(self).set_icon()
+        ButtonIconSetter(self.btn_print_data_inp,PRINT_ICON_PATH).set_icon()
+        ButtonIconSetter(self.print_lp_btn,PRINT_ICON_PATH).set_icon()
+        ButtonIconSetter(self.btn_print_analysis,PRINT_ICON_PATH).set_icon()
+        ButtonIconSetter(self.print_results_btn,PRINT_ICON_PATH).set_icon()
 
-    #     # File Dialog for saving PDF
-    #     file_dialog = QFileDialog(self)
-    #     options = QFileDialog.Option(0)  # PyQt6 Fix
-    #     file_name, _ = file_dialog.getSaveFileName(self, "Save as PDF", "", "PDF Files (*.pdf)", options=options)
+        NonEditableCellManager(self.machining_table).make_cells_non_editable()
+        
+        
 
-    #     if file_name:
-    #         printer.setOutputFileName(file_name)
-    #         painter = QPainter(printer)
-    #         rect = painter.viewport()
+    def handle_line_edits(self, index):
+        if index == 1:
+            for row in [3,4,5]:
+               line_edit = self.machining_table.cellWidget(row, self.machining_table.columnCount() - 1) 
+               if line_edit:
+                   line_edit.clear()
+                   line_edit.setPlaceholderText("N/A")
+                   line_edit.setReadOnly(True)
+                   line_edit.setStyleSheet("color: gray;")
 
-    #         # 🔹 Fix `size.scale()` for PyQt6
-    #         size = self.canvas.sizeHint()
-    #         size = size.scaled(rect.size(), Qt.AspectRatioMode.KeepAspectRatio)  # PyQt6 Syntax
+            
+        else:
+            for row,placeholder in zip([3,4,5],["⌀16 In mm","⌀14 In mm","⌀12 In mm"]):
+                line_edit = self.machining_table.cellWidget(row, self.machining_table.columnCount() - 1)
+                if line_edit:
+                    line_edit.setReadOnly(False)
+                    line_edit.setPlaceholderText(placeholder)
+                    line_edit.setStyleSheet(None)
+    def switch_to_factoryPage(self):
+        self.stackedWidget.setCurrentIndex(5)
+    def print_to_a3(self):
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        printer.setPageSize(QPageSize(QPageSize.PageSizeId.A3))  # Set A3 size
+        printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)  # Save as PDF
+        file_path, _ = QFileDialog.getSaveFileName(self, "Save PDF", "", "PDF Files (*.pdf)")
 
-    #         # 🔹 Fix `size.toSize()`
-    #         painter.setViewport(rect.x(), rect.y(), size.width(), size.height())
-    #         painter.setWindow(self.canvas.rect().toRect())  # Convert QRectF → QRect
+        if file_path:
+            printer.setOutputFileName(file_path)
 
-    #         # 🔹 Render the canvas correctly
-    #         self.canvas.render(painter)
-    #         painter.end()
+            # Get page and widget sizes
+            page_rect = printer.pageRect(QPrinter.Unit.DevicePixel)  # A3 Page size in pixels
+            widget_rect = self.rect()  # Widget size in pixels
 
-    #         print(f"✅ PDF successfully saved: {file_name}")
-    # def save_as_image(self):
-    #     printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-    #     printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
-    #     printer.setPageOrientation(QtGui.QPageLayout.Orientation.Landscape)  # ✅ Fixed
-    #     printer.setPageSize(QtGui.QPageSize(QtGui.QPageSize.PageSizeId.A4))  # ✅ Fully correct now
+            # Calculate scale factor
+            scale_x = page_rect.width() / widget_rect.width()
+            scale_y = page_rect.height() / widget_rect.height()
+            scale_factor = min(scale_x, scale_y)  # Maintain aspect ratio
 
-    #     # File Dialog for saving PDF
-    #     file_dialog = QFileDialog(self)
-    #     file_name, _ = file_dialog.getSaveFileName(self, "Save as PDF", "", "PDF Files (*.pdf)")
+            # Start painting
+            painter = QPainter(printer)
+            painter.translate(page_rect.x(), page_rect.y())  # Align top-left
+            painter.scale(scale_factor, scale_factor)  # Scale content
+            self.render(painter)  # Print the entire widget
 
-    #     if file_name:
-    #         printer.setOutputFileName(file_name)
-    #         painter = QPainter(printer)
-    #         rect = painter.viewport()
+            # Reset scale before adding text
+            painter.resetTransform()
 
-    #         # ✅ Corrected scaling for PyQt6
-    #         size = self.canvas2.sizeHint()
-    #         size = size.scaled(rect.size(), Qt.AspectRatioMode.KeepAspectRatio)
+            # Set font size
+            font = painter.font()
+            font.setPointSize(6)  # Increased for better visibility
+            painter.setFont(font)
 
-    #         scale_factor = 0.8  # Adjust this to control the final size
-    #         width = int(rect.width() * scale_factor)
-    #         height = int(rect.height() * scale_factor)
+            # Set text color to black
+            painter.setPen(QColor(128, 128, 128))
 
-    #         painter.setViewport(rect.x(), rect.y(), width, height)
-    #         painter.setWindow(self.canvas.rect())  # ✅ No need for `.toRect()` in PyQt6
+            # Define text position using QRect
+            text_rect = QRect(50, int(page_rect.height()) - 12000, int(page_rect.width()) - 100, 250)  # Centered at bottom
 
-    #         # ✅ Render the canvas
-    #         self.canvas2.render(painter)
-    #         painter.end()
+            # Draw disclaimer text
+            disclaimer = "***These are system-generated values and may vary from the actual floor fabrication process.***"
+            painter.drawText(text_rect, Qt.AlignmentFlag.AlignHCenter, disclaimer)
 
-    #     print(f"✅ PDF successfully saved: {file_name}")
+            # Finish painting
+            painter.end()
+
+            print("Saved as:", file_path)
 
     def save_as_image(self):
         """
@@ -237,6 +261,7 @@ QFrame{
         self.widget_3.setStyleSheet("QComboBox{\n"
 "border:1px solid #ccc;\n"
 "padding:4px;\n"
+
 "border-radius: 2px;\n"
 "\n"
 "\n"
@@ -379,15 +404,15 @@ QFrame{
 "}")
 
     def set_default_machine_count(self):
-        self.spinBox.setValue(1)
-        self.spinBox_2.setValue(1)
-        self.spinBox_3.setValue(1)
-        self.spinBox_4.setValue(1)
-        self.spinBox_5.setValue(1)
-        self.spinBox_6.setValue(1)
-        self.spinBox_7.setValue(1)
-        self.spinBox_8.setValue(1)
-        self.spinBox_9.setValue(1)
+        self.double_mitersaw_spinbox.setValue(1)
+        self.single_mitersaw_spinbox.setValue(1)
+        self.notching_saw_spinbox.setValue(1)
+        self.endmilling_spinbox.setValue(1)
+        self.cnc_spinbox.setValue(1)
+        self.drilling_machine_spinbox.setValue(1)
+        self.copyrouter_spinbox.setValue(1)
+        self.punch_press_spinbox.setValue(1)
+        self.coner_crimper_spinbox.setValue(1)
     def save_as_image_lp(self):
         file_path, _ = QFileDialog.getSaveFileName(
             self,
@@ -431,49 +456,13 @@ QFrame{
             text=line_edit.text().strip()
             if text and not text.endswith("hrs"):
                 line_edit.setText(f"{text} hrs")
-
-
-    def add_placeholder_machining_table(self):
-        # item = QTableWidgetItem("In mm")
-        # item.setForeground(QColor("gray"))
-        # self.machining_table.setItem(3,13,item)
-        line_edit = QtWidgets.QLineEdit()
-        line_edit.setPlaceholderText("In mm")  # Set Placeholder
-        self.machining_table.setCellWidget(3, 13, line_edit)
-        # self.machining_table.setCellWidget(4, 13, line_edit)
-        # self.machining_table.setCellWidget(5, 13, line_edit)
-        # self.machining_table.setCellWidget(6, 13, line_edit)
-        # self.machining_table.setCellWidget(7, 13, line_edit)
-        # self.machining_table.setCellWidget(8, 13, line_edit)
-
-        
-
-    # def remove_placeholder(self,row,col):
-    #     item=self.machining_table.item(row,col)
-    #     if item and item.text()=='In mm':
-    #         item.setText("")
-    #         item.setForeground(QColor("black"))
             
     def restore_placeholder(self,row,col):
         if row!=3 and col!=13:
             item=self.machining_table.item(3,13)
             if item and item.text().strip()=="":
                 self.add_placeholder_machining_table()
-        
-        
-    # def create_db_pool(self):
-    #     db_config={
-    #         # "host":"192.168.29.14",
-    #         # "user":"local_app_user",
-    #         # "password":"schueco&321",
-    #         # "database":"fab"
-    #         "host":"10.95.136.128",
-    #         "user":"fabricationuser",
-    #         "password":"schueco&321",
-    #         "database":"fabrication"
-
-    #     }
-    #     self.db_pool=pooling.MySQLConnectionPool(pool_name="mypool", pool_size=15, **db_config)
+       
 
     def show_dialog(self):
         items=[self.saved_system_combo.itemText(i) for i in range(self.saved_system_combo.count())]
@@ -580,17 +569,6 @@ QFrame{
                 self.label_23.setPixmap(QtGui.QPixmap(image_path))
                 return  # Exit after first match
         self.label_23.clear()
-    # def current_type_image(self):
-    #     current_text = self.type_combo.currentText().strip()
-    #     image_extensions = [".png", ".jpg", ".jpeg"]
-    #     for ext in image_extensions:
-    #         image_path = self.resource_path(f"assets/icons/{current_text}{ext}")
-    #         if os.path.exists(image_path):  # Check if file exists
-    #             pixmap=QtGui.QPixmap(image_path)
-    #             scaled_pixmap=pixmap.scaled(self.label_23.width(),self.label_23.height(),Qt.AspectRatioMode.KeepAspectRatio,Qt.TransformationMode.SmoothTransformation)
-    #             self.label_23.setPixmap(scaled_pixmap)
-    #             return  # Exit after first match
-    #     self.label_23.clear()
 
     def remove_system(self,obj,system):
         # conn=self.get_db_connection()
@@ -670,20 +648,12 @@ QFrame{
                     index=cell_widget.findText(value)
                     if index>=0:
                         cell_widget.setCurrentIndex(index)
+                elif cell_widget and isinstance(cell_widget,QLineEdit):
+                    cell_widget.setText(value)
                 else:
                     if not self.machining_table.item(row,col):
                         self.machining_table.setItem(row,col,QTableWidgetItem())
-                    if col==13:
-                        line_edit = QtWidgets.QLineEdit()
-                        line_edit.setPlaceholderText("In mm")  # Set Placeholder
-                        self.machining_table.setCellWidget(row, col, line_edit)
-                        self.machining_table.cellWidget(row,col).setText(value)
-                    else:
-                        self.machining_table.item(row,col).setText(value)
-
-                        
-
-        #load assembly table data
+                    self.machining_table.item(row,col).setText(value)
         
         cursor.execute("SELECT row_num, col1 FROM assembly_data WHERE user_id=%s AND system_id=%s", 
                (user_id, system_id))
@@ -705,10 +675,7 @@ QFrame{
                     self.assembly_table.item(row,col).setText(value)
 
         #load handling data
-        
-
-
-
+       
         cursor.execute("SELECT row_num, col1 FROM handling_data WHERE user_id=%s AND system_id=%s", 
                (user_id, system_id))
         for row_data in cursor.fetchall():
@@ -727,32 +694,6 @@ QFrame{
                     if not self.handling_table.item(row,col):
                         self.handling_table.setItem(row,col,QTableWidgetItem())
                     self.handling_table.item(row,col).setText(value)
-        #load installation data
-        
-
-
-
-        # cursor.execute("SELECT row_num, col1 FROM installation_data WHERE user_id=%s AND system_id=%s", 
-        #        (user_id, system_id))
-        # for row_data in cursor.fetchall():
-        #     row,col1=row_data
-        #     col_values=[col1]
-        #     for col_offset, value in enumerate(col_values,start=1):
-        #         col=col_offset
-        #         cell_widget=self.installation_table.cellWidget(row,col)
-        #         if cell_widget and isinstance(cell_widget,QComboBox):
-        #             index=cell_widget.findText(value)
-        #             if index>=0:
-        #                 cell_widget.setCurrentIndex(index)
-        #         elif cell_widget and isinstance(cell_widget,QLineEdit):
-        #             cell_widget.setText(value)
-        #         else:
-        #             if not self.installation_table.item(row,col):
-        #                 self.installation_table.setItem(row,col,QTableWidgetItem())
-        #             self.installation_table.item(row,col).setText(value)
-        
-
-
         conn.close()
         self.cal_machining_assemb_handling_install()
         
@@ -770,17 +711,40 @@ QFrame{
         table.cellWidget(row,col).setText(val)
 
     def set_line_edits_to_machining_table(self):
-        for i in range(4,self.machining_table.rowCount()):
+        cutting=["45°","90°","45°-90°"]
+        notching=["≤50mm","≤100mm","≤150mm","≤200mm","≤250mm"]
+        endmilling=["≤50mm","≤100mm","≤150mm","≤200mm","≤250mm"]
+        free_hand=["⌀6 In mm","⌀8 In mm","⌀10 In mm","⌀12 In mm","⌀14 In mm","⌀16 In mm"]
+        for i in range(3,self.machining_table.rowCount()):
+            text=free_hand.pop()
             line_edit=QLineEdit()
-            line_edit.setPlaceholderText("In mm")  # Set Placeholder
+            line_edit.setPlaceholderText(text)  # Set Placeholder
             self.machining_table.setCellWidget(i, 13, line_edit)
 
+        for i in range(2,11):
+            line_edit=QLineEdit()
+            line_edit.setPlaceholderText("2 wall")
+            self.machining_table.setCellWidget(7,i,line_edit)
+        for i in range(2,11):
+            line_edit=QLineEdit()
+            line_edit.setPlaceholderText("1 wall")
+            self.machining_table.setCellWidget(8,i,line_edit)
 
-
-
-            
-        
-        
+        for i in range(6,self.machining_table.rowCount()):
+            text=cutting.pop()
+            line_edit=QLineEdit()
+            line_edit.setPlaceholderText(text)
+            self.machining_table.setCellWidget(i,1,line_edit)
+        for i in range(4,self.machining_table.rowCount()):
+            text=notching.pop()
+            line_edit=QLineEdit()
+            line_edit.setPlaceholderText(text)
+            self.machining_table.setCellWidget(i,11,line_edit)
+        for i in range(4,self.machining_table.rowCount()):
+            text=endmilling.pop()
+            line_edit=QLineEdit()
+            line_edit.setPlaceholderText(text)
+            self.machining_table.setCellWidget(i,12,line_edit)
 
     def load_saved_systems(self):
         # conn=self.get_db_connection()
@@ -798,8 +762,6 @@ QFrame{
             self.system_combo.addItems(systems)
             self.system_combo_inp.clear()
             self.system_combo_inp.addItems(systems)
-
-
             self.saved_system_combo.addItems(systems)
         except mysql.connector.Error as err:
             conn.rollback()
@@ -816,7 +778,7 @@ QFrame{
             conn.start_transaction()
             system_name=self.system_combo_inp.currentText().strip()
             print("the system name is ",system_name)
-            type=self.type_combo_inp.currentText()
+            system_type=self.type_combo_inp.currentText()
             size=self.size_le_inp.text().strip()
             machining_time = self.machining_time_le.text()
             # installation_time = self.installation_time_le.text()
@@ -842,7 +804,7 @@ QFrame{
             SET type = %s, size = %s, machining_time = %s, 
                 assembly_time = %s, handling_time = %s, total_time = %s
             WHERE system_name = %s AND user_id = %s
-        """, (type, size, machining_time, assembly_time, handling_time, total_time, system_name, user_id))
+        """, (system_type, size, machining_time, assembly_time, handling_time, total_time, system_name, user_id))
                     #  Step 3: Delete old machining, assembly, handling, and installation data for this system
                      cursor.execute("DELETE FROM machining_data WHERE system_id = %s", (system_id,))
                      cursor.execute("DELETE FROM assembly_data WHERE system_id = %s", (system_id,))
@@ -855,25 +817,17 @@ QFrame{
                 result=QMessageBox.question(self,"System Exists",f"The system '{system_name}' already exists.Do you want to replace it?",QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No)
                 if result==QMessageBox.StandardButton.Yes:
 
-                    update_system(system_name,user_id,type,size,machining_time,assembly_time,handling_time,total_time,cursor)
+                    update_system(system_name,user_id,system_type,size,machining_time,assembly_time,handling_time,total_time,cursor)
                     flag=True
                     
                 else:
                     return
                 
-
-                
-
-            
-        #     cursor.execute("""
-        #     INSERT INTO saved_systems (user_id, system_name,type,size, machining_time, installation_time, assembly_time, handling_time, total_time)
-        #     VALUES (%s, %s, %s, %s, %s, %s, %s,%s,%s)
-        # """, (user_id, system_name,type,size, machining_time, installation_time, assembly_time, handling_time, total_time))
             if not flag:
                 cursor.execute("""
             INSERT INTO saved_systems (user_id, system_name,type,size, machining_time, assembly_time, handling_time, total_time)
             VALUES (%s, %s, %s, %s, %s, %s,%s,%s)
-        """, (user_id, system_name,type,size, machining_time, assembly_time, handling_time, total_time))
+        """, (user_id, system_name,system_type,size, machining_time, assembly_time, handling_time, total_time))
 
 
             cursor.execute("SELECT id FROM saved_systems WHERE system_name = %s AND user_id = %s", (system_name, user_id))
@@ -937,24 +891,6 @@ QFrame{
                         row_data_2.append("")
                 cursor.execute("INSERT INTO handling_data (user_id, system_id, row_num, col1) VALUES (%s, %s, %s, %s)", 
         (user_id, system_id, row, *row_data_2))
-                #save installation data
-        #     for row in range(self.installation_table.rowCount()):
-        #         row_data_2=[]
-        #         for col in range(1,2):
-        #             item=self.installation_table.item(row,col)
-        #             cell_widget=self.installation_table.cellWidget(row,col)
-        #             if cell_widget and isinstance(cell_widget,QComboBox):
-        #                 row_data_2.append(cell_widget.currentText())
-        #             elif cell_widget and isinstance(cell_widget,QLineEdit):
-        #                 row_data_2.append(cell_widget.text())
-        #             elif item:
-        #                 row_data_2.append(item.text())
-        #             else:
-        #                 row_data_2.append("")
-        #         cursor.execute("INSERT INTO installation_data (user_id, system_id, row_num, col1) VALUES (%s, %s, %s, %s)", 
-        # (user_id, system_id, row, *row_data_2))
-
-            
 
             conn.commit()
             QMessageBox.information(self,"Success","Data saved successfully!")
@@ -977,14 +913,6 @@ QFrame{
             #save installation data\
 
 
-        
-
-
-            
-
-
-            
-
         except mysql.connector.Error as err:
             conn.rollback()
             QMessageBox.critical(self,"Failed",f"{err}")
@@ -992,108 +920,7 @@ QFrame{
             cursor.close()
             conn.close()
     
-    # def print_to_pdf(self):
-    #     # Capture the entire widget as an image
-    #     pixmap = QPixmap(self.size())
-    #     self.render(pixmap)
-
-    #     # Open Save Dialog
-    #     file_name, _ = QFileDialog.getSaveFileName(self, "Save as PDF", "", "PDF Files (*.pdf)")
-    #     if file_name:
-    #         printer = QPrinter()
-    #         printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
-    #         printer.setOutputFileName(file_name)
-
-    #         # Print the image to PDF
-    #         painter = QPainter(printer)
-    #         painter.drawPixmap(0, 0, pixmap)
-    #         painter.end()
-    #         print("PDF saved successfully!")
-
-    # def print_to_pdf(self):
-    #     # 1. Capture the widget as a QPixmap
-    #     pixmap = QPixmap(self.size())
-    #     self.render(pixmap)
-
-    #     # 2. Prompt user for PDF file path
-    #     file_name, _ = QFileDialog.getSaveFileName(
-    #         self,
-    #         "Save as PDF",
-    #         "",
-    #         "PDF Files (*.pdf)"
-    #     )
-    #     if file_name:
-    #         # 3. Configure the printer
-    #         printer = QPrinter()
-    #         printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
-    #         printer.setOutputFileName(file_name)
-
-    #         # A4 size in Landscape
-    #         printer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
-    #         printer.setPageOrientation(QPageLayout.Orientation.Landscape)
-
-    #         # 4. Scale the captured pixmap to fit the printable page
-    #         page_rect = printer.pageRect(QPrinter.Unit.Point)
-    #         page_size = QSize(int(page_rect.width()), int(page_rect.height()))
-
-    #         scaled_pixmap = pixmap.scaled(
-    #             page_rect.size(),
-    #             Qt.AspectRatioMode.KeepAspectRatio,
-    #             Qt.TransformationMode.SmoothTransformation
-    #         )
-
-    #         # 5. Paint the scaled pixmap onto the PDF
-    #         painter = QPainter(printer)
-    #         painter.drawPixmap(0, 0, scaled_pixmap)
-    #         painter.end()
-
-    #         print("PDF saved successfully!")
-    # def print_to_pdf(self):
-    #     # 1. Capture the widget using grab() which is more reliable
-    #     pixmap = self.grab()
-
-    #     # 2. Prompt user for PDF file path
-    #     file_name, _ = QFileDialog.getSaveFileName(
-    #         self,
-    #         "Save as PDF",
-    #         "",
-    #         "PDF Files (*.pdf)"
-    #     )
-
-    #     if not file_name:
-    #         return  # User canceled the dialog
-
-    #     # 3. Configure the printer
-    #     printer = QPrinter()
-    #     printer.setResolution(300)
-    #     # printer.setOutputFormat(QPrinter.PdfFormat)
-    #     printer.setOutputFileName(file_name)
-
-    #     # Set A4 landscape with proper margins
-    #     printer.setPageSize(QPageSize(QPageSize.A4))
-    #     printer.setPageOrientation(QPageLayout.Landscape)
-    #     printer.setFullPage(True)  # Remove default margins
-
-    #     # 4. Calculate scaling and positioning
-    #     painter = QPainter(printer)
-    #     page_rect = printer.pageRect(QPrinter.Point)
-    #     pixmap_size = pixmap.size()
-
-    #     # Calculate scale factor while maintaining aspect ratio
-    #     scale = min(page_rect.width() / pixmap_size.width(),
-    #                 page_rect.height() / pixmap_size.height())
-
-    #     scaled_size = pixmap_size * scale
-    #     x_offset = (page_rect.width() - scaled_size.width()) / 2
-    #     y_offset = (page_rect.height() - scaled_size.height()) / 2
-
-    #     # 5. Draw the pixmap centered on the page
-    #     painter.translate(x_offset, y_offset)
-    #     painter.scale(scale, scale)
-    #     painter.drawPixmap(0, 0, pixmap)
-    #     painter.end()
-
-    #     print(f"PDF saved successfully to {file_name}")
+    
     def print_to_pdf(self):
         # 1. Capture the widget using grab() which is more reliable
         pixmap = self.grab()
@@ -1132,12 +959,6 @@ QFrame{
         height_ratio = paper_rect.height() / pixmap_size.height()
         scale = min(width_ratio, height_ratio) 
         
-        # scale=min(width_ratio,height_ratio)*1.1
-
-        # Calculate scale factor while maintaining aspect ratio
-        # scale = min(page_rect.width() / pixmap_size.width(),
-        #             page_rect.height() / pixmap_size.height())
-
         scaled_size = QSize(int(pixmap_size.width() * scale), int(pixmap_size.height() * scale))
         x_offset = (paper_rect.width() - scaled_size.width()) / 2
         y_offset = (paper_rect.height() - scaled_size.height()) / 2
@@ -1178,144 +999,141 @@ QFrame{
 
         print("PDF saved successfully!")
 
-    
-    
-
     def data_for_calculation(self):
         self.time_data={
-            ("cutting","45°","1Hsaw"):120, 
-            ("cutting","90°","1Hsaw"):120, 
-            ("cutting","45°-90°","1Hsaw"):120, 
+            ("cutting","45°",SINGLE_MITER_SAW):120, 
+            ("cutting","90°",SINGLE_MITER_SAW):120, 
+            ("cutting","45°-90°",SINGLE_MITER_SAW):120, 
 
-            ("cutting","45°","2Hsaw"):60, 
-            ("cutting","90°","2Hsaw"):60, 
-            ("cutting","45°-90°","2Hsaw"):60, 
+            ("cutting","45°",DOUBLE_MITER_SAW):60, 
+            ("cutting","90°",DOUBLE_MITER_SAW):60, 
+            ("cutting","45°-90°",DOUBLE_MITER_SAW):60, 
 
-            ("6mmx34mm","1wall","CNC"):45,
-            ("6mmx34mm","1wall","Router"):115,
-            # ("6mmx34mm","1wall","Punch"):5,
+            ("6mmx34mm","1wall",CNC):45,
+            ("6mmx34mm","1wall",COPY_ROUTER):115,
+            # ("6mmx34mm","1wall",PUNCH):5,
 
-            ("6mmx34mm","2wall","CNC"):90,
-            ("6mmx34mm","2wall","Router"):175,
-            # ("6mmx34mm","2wall","Punch"):10,
+            ("6mmx34mm","2wall",CNC):90,
+            ("6mmx34mm","2wall",COPY_ROUTER):175,
+            # ("6mmx34mm","2wall",PUNCH):10,
 
-            ("8mmx34mm","1wall","CNC"):45,
-            ("8mmx34mm","1wall","Router"):115,
-            # ("8mmx34mm","1wall","Punch"):5,
+            ("8mmx34mm","1wall",CNC):45,
+            ("8mmx34mm","1wall",COPY_ROUTER):115,
+            # ("8mmx34mm","1wall",PUNCH):5,
 
-            ("8mmx34mm","2wall","CNC"):90,
-            ("8mmx34mm","2wall","Router"):175,
-            # ("8mmx34mm","2wall","Punch"):10,
+            ("8mmx34mm","2wall",CNC):90,
+            ("8mmx34mm","2wall",COPY_ROUTER):175,
+            # ("8mmx34mm","2wall",PUNCH):10,
 
-            ("10mmx34mm","1wall","CNC"):45,
-            ("10mmx34mm","1wall","Router"):115,
-            # ("10mmx34mm","1wall","Punch"):5,
+            ("10mmx34mm","1wall",CNC):45,
+            ("10mmx34mm","1wall",COPY_ROUTER):115,
+            # ("10mmx34mm","1wall",PUNCH):5,
 
-            ("10mmx34mm","2wall","CNC"):90,
-            ("10mmx34mm","2wall","Router"):175,
-            # ("10mmx34mm","2wall","Punch"):10,
+            ("10mmx34mm","2wall",CNC):90,
+            ("10mmx34mm","2wall",COPY_ROUTER):175,
+            # ("10mmx34mm","2wall",PUNCH):10,
 
-            ("12mmx34mm","1wall","CNC"):45,
-            ("12mmx34mm","1wall","Router"):115,
-            # ("12mmx34mm","1wall","Punch"):5,
+            ("12mmx34mm","1wall",CNC):45,
+            ("12mmx34mm","1wall",COPY_ROUTER):135,
+            # ("12mmx34mm","1wall",PUNCH):5,
 
-            ("12mmx34mm","2wall","CNC"):90,
-            ("12mmx34mm","2wall","Router"):175,
-            # ("12mmx34mm","2wall","Punch"):10,
+            ("12mmx34mm","2wall",CNC):90,
+            ("12mmx34mm","2wall",COPY_ROUTER):195,
+            # ("12mmx34mm","2wall",PUNCH):10,
 
-            ("6mmx20mm","1wall","CNC"):35,
-            ("6mmx20mm","1wall","Router"):70,
-            # ("6mmx20mm","1wall","Punch"):5,
+            ("6mmx20mm","1wall",CNC):35,
+            ("6mmx20mm","1wall",COPY_ROUTER):70,
+            # ("6mmx20mm","1wall",PUNCH):5,
 
-            ("6mmx20mm","2wall","CNC"):70,
-            ("6mmx20mm","2wall","Router"):140,
-            # ("6mmx20mm","2wall","Punch"):10,
+            ("6mmx20mm","2wall",CNC):70,
+            ("6mmx20mm","2wall",COPY_ROUTER):140,
+            # ("6mmx20mm","2wall",PUNCH):10,
 
-            ("8mmx20mm","1wall","CNC"):45,
-            ("8mmx20mm","1wall","Router"):115,
-            # ("8mmx20mm","1wall","Punch"):5,
+            ("8mmx20mm","1wall",CNC):45,
+            ("8mmx20mm","1wall",COPY_ROUTER):115,
+            # ("8mmx20mm","1wall",PUNCH):5,
 
-            ("8mmx20mm","2wall","CNC"):90,
-            ("8mmx20mm","2wall","Router"):175,
-            # ("8mmx20mm","2wall","Punch"):10,
+            ("8mmx20mm","2wall",CNC):90,
+            ("8mmx20mm","2wall",COPY_ROUTER):175,
+            # ("8mmx20mm","2wall",PUNCH):10,
 
-            ("8mmx34mm","1wall","CNC"):45,
-            ("8mmx34mm","1wall","Router"):115,
-            # ("8mmx34mm","1wall","Punch"):5,
+            ("8mmx34mm","1wall",CNC):45,
+            ("8mmx34mm","1wall",COPY_ROUTER):115,
+            # ("8mmx34mm","1wall",PUNCH):5,
 
-            ("8mmx34mm","2wall","CNC"):90,
-            ("8mmx34mm","2wall","Router"):175,
-            # ("8mmx34mm","2wall","Punch"):10,
+            ("8mmx34mm","2wall",CNC):90,
+            ("8mmx34mm","2wall",COPY_ROUTER):175,
+            # ("8mmx34mm","2wall",PUNCH):10,
 
-            ("cornercleathole","1wall","CNC"):35,
-            ("cornercleathole","1wall","DrillingM/C"):30,
-            ("cornercleathole","1wall","Punch"):5,
-            ("cornercleathole","1wall","Jig"):35,
-            ("cornercleathole","2wall","CNC"):70,
-            ("cornercleathole","2wall","DrillingM/C"):40,
-            ("cornercleathole","2wall","Punch"):10,
-            ("cornercleathole","2wall","Jig"):70,
-            ("drillinghole","1wall","CNC"):35, #corrected from 15 to 35
-            ("drillinghole","1wall","DrillingM/C"):40,
-            ("drillinghole","2wall","CNC"):60,
-            ("drillinghole","2wall","DrillingM/C"):70,
+            ("cornercleathole","1wall",CNC):15,
+            ("cornercleathole","1wall",DRILLING_MACHINE):30,
+            ("cornercleathole","1wall",PUNCH):5,
+            ("cornercleathole","1wall",JIG):35,
+            ("cornercleathole","2wall",CNC):70,
+            ("cornercleathole","2wall",DRILLING_MACHINE):40,
+            ("cornercleathole","2wall",PUNCH):10,
+            ("cornercleathole","2wall",JIG):70,
+            ("drillinghole","1wall",CNC):15, #corrected from 15 to 35
+            ("drillinghole","1wall",DRILLING_MACHINE):40,
+            ("drillinghole","2wall",CNC):60,
+            ("drillinghole","2wall",DRILLING_MACHINE):70,
 
-            ("notching","≤50mm","CNC"):60,
-            ("notching","≤100mm","CNC"):70,
-            ("notching","≤150mm","CNC"):90,
-            ("notching","≤200mm","CNC"):120,
-            ("notching","≤250mm","CNC"):180,
+            ("notching","≤50mm",CNC):60,
+            ("notching","≤100mm",CNC):70,
+            ("notching","≤150mm",CNC):90,
+            ("notching","≤200mm",CNC):120,
+            ("notching","≤250mm",CNC):180,
 
-            ("notching","≤50mm","NotchingSaw"):60,
-            ("notching","≤100mm","NotchingSaw"):60,
-            ("notching","≤150mm","NotchingSaw"):120,
-            ("notching","≤200mm","NotchingSaw"):120,
-            ("notching","≤250mm","NotchingSaw"):150,
+            ("notching","≤50mm",NOTCHING_SAW):60,
+            ("notching","≤100mm",NOTCHING_SAW):60,
+            ("notching","≤150mm",NOTCHING_SAW):120,
+            ("notching","≤200mm",NOTCHING_SAW):120,
+            ("notching","≤250mm",NOTCHING_SAW):150,
 
-            ("notching","≤50mm","Punch"):10,#corrected from 5 to 10
-            ("notching","≤100mm","Punch"):10,#corrected from 5 to 10
-            ("notching","≤150mm","Punch"):10,#corrected from 5 to 10
-            ("notching","≤200mm","Punch"):10,#corrected from 5 to 10
-            ("notching","≤250mm","Punch"):10,#corrected from 5 to 10
+            ("notching","≤50mm",PUNCH):10,#corrected from 5 to 10
+            ("notching","≤100mm",PUNCH):25,#corrected from 5 to 10
+            ("notching","≤150mm",PUNCH):45,#corrected from 5 to 10
+            ("notching","≤200mm",PUNCH):60,#corrected from 5 to 10
+            ("notching","≤250mm",PUNCH):90,#corrected from 5 to 10
 
-            ("endmilling","≤50mm","CNC"):35,
-            ("endmilling","≤100mm","CNC"):35,
-            ("endmilling","≤150mm","CNC"):70,
-            ("endmilling","≤200mm","CNC"):70,
-            ("endmilling","≤250mm","CNC"):100,
+            ("endmilling","≤50mm",CNC):35,
+            ("endmilling","≤100mm",CNC):35,
+            ("endmilling","≤150mm",CNC):70,
+            ("endmilling","≤200mm",CNC):70,
+            ("endmilling","≤250mm",CNC):100,
 
-            ("endmilling","≤50mm","EndMill"):1,
-            ("endmilling","≤100mm","EndMill"):1,
-            ("endmilling","≤150mm","EndMill"):1,
-            ("endmilling","≤200mm","EndMill"):1,
-            ("endmilling","≤250mm","EndMill"):1,
+            ("endmilling","≤50mm",ENDMILL):60,
+            ("endmilling","≤100mm",ENDMILL):90,
+            ("endmilling","≤150mm",ENDMILL):120,
+            ("endmilling","≤200mm",ENDMILL):150,
+            ("endmilling","≤250mm",ENDMILL):180,
 
-            ("endmilling","≤50mm","Punch"):10,#corrected from 5 to 10
-            ("endmilling","≤100mm","Punch"):10,#corrected from 5 to 10
-            ("endmilling","≤150mm","Punch"):10,#corrected from 5 to 10
-            ("endmilling","≤200mm","Punch"):10,#corrected from 5 to 10
-            ("endmilling","≤250mm","Punch"):10,#corrected from 5 to 10
+            ("endmilling","≤50mm",PUNCH):10,#corrected from 5 to 10
+            ("endmilling","≤100mm",PUNCH):10,#corrected from 5 to 10
+            ("endmilling","≤150mm",PUNCH):10,#corrected from 5 to 10
+            ("endmilling","≤200mm",PUNCH):10,#corrected from 5 to 10
+            ("endmilling","≤250mm",PUNCH):10,#corrected from 5 to 10
 
-            ("freehandmilling","⌀6","CNC"):1,
-            ("freehandmilling","⌀8","CNC"):1,
-            ("freehandmilling","⌀10","CNC"):1,
-            ("freehandmilling","⌀12","CNC"):1,
-            ("freehandmilling","⌀14","CNC"):1,
-            ("freehandmilling","⌀16","CNC"):1,
+            ("freehandmilling","⌀6",CNC):1,
+            ("freehandmilling","⌀8",CNC):1,
+            ("freehandmilling","⌀10",CNC):1,
+            ("freehandmilling","⌀12",CNC):1,
+            ("freehandmilling","⌀14",CNC):1,
+            ("freehandmilling","⌀16",CNC):1,
 
-            ("freehandmilling","⌀6","Router"):5,
-            ("freehandmilling","⌀8","Router"):5,
-            ("freehandmilling","⌀10","Router"):5,
-            ("freehandmilling","⌀12","Router"):5,
-            ("freehandmilling","⌀14","Router"):5,
-            ("freehandmilling","⌀16","Router"):5,
+            ("freehandmilling","⌀6",COPY_ROUTER):5,
+            ("freehandmilling","⌀8",COPY_ROUTER):5,
+            ("freehandmilling","⌀10",COPY_ROUTER):5,
+            ("freehandmilling","⌀12",COPY_ROUTER):5,
+            ("freehandmilling","⌀14",COPY_ROUTER):5,
+            ("freehandmilling","⌀16",COPY_ROUTER):5,
 
-            # ("freehandmilling","⌀6","Punch"):5,
-            # ("freehandmilling","⌀8","Punch"):5,
-            # ("freehandmilling","⌀10","Punch"):5,
-            # ("freehandmilling","⌀12","Punch"):5,
-            # ("freehandmilling","⌀14","Punch"):5,
-            # ("freehandmilling","⌀16","Punch"):5,
+            # ("freehandmilling","⌀6",PUNCH):5,
+            # ("freehandmilling","⌀8",PUNCH):5,
+            # ("freehandmilling","⌀10",PUNCH):5,
+            # ("freehandmilling","⌀12",PUNCH):5,
+            # ("freehandmilling","⌀14",PUNCH):5,
+            # ("freehandmilling","⌀16",PUNCH):5,
         }
     def switch_to_dataInputPage(self):
         self.stackedWidget.setCurrentIndex(0)
@@ -1338,36 +1156,28 @@ QFrame{
                 item=self.assembly_table.item(row,col)
                 if item:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+
         for row in range(self.handling_table.rowCount()):
             for col in range(self.handling_table.columnCount()):
                 item=self.handling_table.item(row,col)
                 if item:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        # for row in range(self.installation_table.rowCount()):
-        #     for col in range(self.installation_table.columnCount()):
-        #         item=self.installation_table.item(row,col)
-        #         if item:
-        #             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+       
         
 
     def plot_data(self, machining_type,data=None,labels=None):
         """Plot initial or updated data"""
-        
-        # self.canvas.axes1.clear()
-        # normed_data=squarify.normalize_sizes(data,100,100)
-        # squarify.plot(sizes=normed_data,label=labels,ax=self.canvas.axes1,alpha=0.7)
-        # self.canvas.axes1.set_title("Line Production")
-        # self.canvas.axes1.axis("off")
+      
         self.canvas.fig.clear()
         self.canvas.axes1 = self.canvas.fig.add_subplot(121)
-    
         normed_data = squarify.normalize_sizes(data, 100, 100)
     
     # Plot the treemap
         # wrapped_labels = [textwrap.fill(label, width=10) for label in labels]
         # colors=["#cccccc","#7b838a","#7a7d7d","#333333","#a2999e"]
-
-        squarify.plot(sizes=normed_data, label=labels, ax=self.canvas.axes1, alpha=0.7,edgecolor="white", linewidth=2)
+        # colors=cm.viridis_r([i / len(normed_data) for i in range(len(normed_data))])
+        log_sizes = np.log1p(normed_data)
+        squarify.plot(sizes=log_sizes, label=labels, ax=self.canvas.axes1, alpha=0.7,edgecolor="white", linewidth=2)
         self.canvas.axes1.set_title(f"Line Production {machining_type} (48 Hours)")
         self.canvas.axes1.axis("off")  # Hide axes
         
@@ -1398,83 +1208,71 @@ QFrame{
     def switch_to_resultsPage(self):
         self.stackedWidget.setCurrentIndex(3)
         
-    
     def get_combo(self):
         combo=QtWidgets.QComboBox()
         return combo
     
 
     def load_b_charts(self):
-        if not self.isDataFilled:
-            QMessageBox.warning(self,"No data","Please fill the data and try again!")
-            return
-        self.basic_btn_lp.setChecked(True)
-        self.basic_btn_rs.setChecked(True)
-        self.basic_btn.setChecked(True)
+        self.load_chart_group(BASIC, [self.basic_btn_lp, self.basic_btn_rs, self.basic_btn], "Basic")
 
-        machine_lables,time_labels=self.get_time_by_single_machine("basic")
-        time_values=[]
+    def load_bc_charts(self):
+        self.load_chart_group(BASIC_CNC, [self.basic_cnc_lp, self.basic_cnc_rs, self.basic_cnc_btn], "Basic+CNC")
 
-        for i in range(len(time_labels)):
-            time_one_unit=time_labels[i]
-            t=2880/time_one_unit
-            time_values.append(int(t))
-        print("The time values are ",time_values)
-        if len(time_values)>0:
-            self.min_units=min(time_values)
-        treemap_labels=[]
-        for i in range(len(machine_lables)):
-            treemap_labels.append(f"{machine_lables[i]}\n{time_values[i]} units")
-        
-        layout=self.line_production_widget.layout()
-        if layout is None:
-            layout = QVBoxLayout(self.line_production_widget)
-        if not hasattr(self,"canvas"):
-            self.canvas = MplCanvas(self, width=5, height=4, dpi=100)
-            layout.addWidget(self.canvas)
-        self.plot_data("Basic",data=time_values,labels=treemap_labels)
-        self.plot_units_per_shift("Basic")
-        self.total_machining_time()
+    def load_bp_charts(self):
+        self.load_chart_group(BASIC_PUNCH, [self.basic_punch_lp, self.basic_punch_rs, self.basic_punch_btn], "Basic+Punch")
 
-        self.plot_units_per_week_treemap()
-        self.plot_cost_per_unit("basic")
-        self.plot_machine_usage("basic")
-        self.plot_time_consumption("basic")
-        self.plot_idle_hours("basic")
-        self.total_assembly_time()
+    def load_bpc_charts(self):
+        self.load_chart_group(BASIC_PUNCH_CNC, [self.basic_punch_cnc_lp, self.basic_punch_cnc_rs, self.basic_punch_cnc_btn],"Basic+Punch+CNC")
+
       
-    def plot_idle_hours(self,type):
+    def plot_idle_hours(self,combination_type):
         units=int(self.unit_le.text())
         assembly_resources=int(self.assmb_res_le.text())
         print("the assembly time is ",self.assemb_time)
         assembly_time_for_one_rsrc=self.assemb_time*2
+        print("assembly_time_for_one_rsrc ",assembly_time_for_one_rsrc)
 
         # assembly_time=self.assemb_time*units
         assembly_time=(assembly_time_for_one_rsrc/assembly_resources)*units
-
+        print("the assemb time is sijdkjd ",assembly_time)
+   
         try:
-            total_time=self.get_total_time()
+            # total_time=self.get_total_time()
+            units = GetData(self).get_units()
+            machine_time_data = {
+                "basic": self.time_taken_by_machine[BASIC],
+                "basic+cnc": self.time_taken_by_machine[BASIC_CNC],
+                "basic+punch": self.time_taken_by_machine[BASIC_PUNCH],
+                "basic+punch+cnc": self.time_taken_by_machine[BASIC_PUNCH_CNC],
+            }
+            total_time = TotalTimeCalculator(machine_time_data, units).get_all_totals()
             a=round((total_time["basic"]/60),2)
             b=round((total_time["basic_cnc"]/60),2)
             c=round((total_time["basic_punch"]/60),2)
             d=round((total_time["basic_punch_cnc"]/60),2)
-            total_time_b=self.convert_to_hours_return_float(a)
-            total_time_bc=self.convert_to_hours_return_float(b)
-            total_time_bp=self.convert_to_hours_return_float(c)
-            total_time_bpc=self.convert_to_hours_return_float(d)
+            print("The type of a is   ",type(a)," ",a)
+            total_time_b=TimeConverter.convert_to_hours(a)
+            total_time_bc=TimeConverter.convert_to_hours(b)
+            total_time_bp=TimeConverter.convert_to_hours(c)
+            total_time_bpc=TimeConverter.convert_to_hours(d)
             print("The total time is ",total_time_b,total_time_bc,total_time_bp,total_time_bpc)
         except ZeroDivisionError:
             total_time_b=0
             total_time_bc=0
             total_time_bp=0
             total_time_bpc=0
-        machine_labels,machine_time=self.get_time_by_single_machine(type)
+            
+        machine_labels,machine_time=self.get_time_by_single_machine(combination_type)
+
+        
+        print("The machine time istd ",machine_time)
         time_taken=[]
         idle_time=[]
         for i in range(len(machine_time)):
             consumed_time=machine_time[i]*units
             v=round((consumed_time/60),2)
-            tt=self.convert_to_hours_return_float(v)
+            tt=TimeConverter.convert_to_hours(v)
             time_taken.append(tt)
             t=(2880-consumed_time)/60
             if t<0:
@@ -1482,10 +1280,10 @@ QFrame{
             else:
                 idle_time.append(t)
 
-        print("The time consumed is ",time_taken)
+        print("The time consumed istd ",time_taken)
         
         updated_idle_time=[]
-        if type=='basic':
+        if combination_type=='basic':
             for i in range(len(time_taken)):
                 print("The total time by b ",total_time_b)
                 print("The time taken by b single machine ",time_taken[i])
@@ -1495,7 +1293,7 @@ QFrame{
                 else:
                     updated_idle_time.append(0.0)
                 # updated_idle_time.append(updt)
-        elif type=="basic+cnc":
+        elif combination_type=="basic+cnc":
             for i in range(len(time_taken)):
                 print("The total time by bc ",total_time_bc)
                 print("The time taken by bc single machine ",time_taken[i])
@@ -1505,7 +1303,7 @@ QFrame{
                 else:
                     updated_idle_time.append(0.0)
                 # updated_idle_time.append(updt)
-        elif type=="basic+punch":
+        elif combination_type=="basic+punch":
             for i in range(len(time_taken)):
                 print("The total time by bp ",total_time_bp)
                 print("The time taken by bp single machine ",time_taken[i])
@@ -1515,7 +1313,7 @@ QFrame{
                 else:
                     updated_idle_time.append(0.0)
                 # updated_idle_time.append(updt)
-        elif type=="basic+punch+cnc":
+        elif combination_type=="basic+punch+cnc":
             for i in range(len(time_taken)):
                 print("The total time by bpc ",total_time_bpc)
                 print("The time taken by bpc single machine ",time_taken[i])
@@ -1552,21 +1350,7 @@ QFrame{
         self.canvas3.fig.clear()
         self.canvas3.axes1=self.canvas3.fig.add_subplot(111)
         self.canvas3.axes1.set_title("Machine idle and consumption hours(8Hrs)",weight='bold')
-#         self.canvas3.axes1.set_title(
-#     "■ Machine idle  ■ Consumption hours",
-#     fontsize=12,
-#     color='black'
-# )
-        # self.canvas3.axes1.plot([], [], 's', color='#b2e580', markersize=10, label="Machine idle")
-        # self.canvas3.axes1.plot([], [], 's', color='#65ca00', markersize=10, label="Consumption hours")
 
-# Add colored squares manually
-        # self.canvas3.axes1.text(0.5, 1.05, "■", color='red', transform=self.canvas3.axes1.transAxes, ha='center', va='center', fontsize=12)
-        # self.canvas3.axes1.text(0.7, 1.05, "■", color='blue', transform=self.canvas3.axes1.transAxes, ha='center', va='center', fontsize=12)
-
-
-        # self.canvas3.axes1.axis("off")
-        # self.canvas3.fig.set_figheight(8)  # Increase height as needed
         self.canvas3.fig.set_figwidth(5)
         bars1=self.canvas3.axes1.barh(indices+0.4,time_taken,height=0.4,color="#65ca00",label="Consumption Hours")
         bars2=self.canvas3.axes1.barh(machine_labels,updated_idle_time,height=0.4,color="#b2e580",label="Machine Idle")
@@ -1594,36 +1378,7 @@ QFrame{
         self.canvas3.draw_idle()
         self.canvas3.fig.tight_layout()
 
-    # def subtract_time(self,hour_min1,hour_min2):
-    #     hours1, mins1 = divmod(hour_min1 * 100, 100)
-    #     hours2, mins2 = divmod(hour_min2 * 100, 100)
-    #      # Subtract hours and minutes separately
-    #     total_hours = hours1 - hours2
-    #     total_minutes = mins1 - mins2
-    #     if total_minutes < 0:
-    #         total_hours -= 1
-    #         total_minutes += 60
-    #     try:
-    #         result=float(f"{int(total_hours)}.{int(total_minutes):02}")
-    #     except ValueError:
-    #         result=0.0
-    #     return result
-    # def subtract_time(self, hour_min1, hour_min2):
-    #     # Extract hours and minutes correctly
-    #     hours1, mins1 = divmod(int(hour_min1 * 100), 100)
-    #     hours2, mins2 = divmod(int(hour_min2 * 100), 100)
 
-    #     # Perform subtraction
-    #     total_hours = hours1 - hours2
-    #     total_minutes = mins1 - mins2
-
-    #     # Adjust negative minutes
-    #     if total_minutes < 0:
-    #         total_hours -= 1
-    #         total_minutes += 60
-
-    #     # Return as proper HH.MM format
-    #     return float(f"{total_hours}.{total_minutes:02}")
     def switch_to_recommendation_page(self):
         self.stackedWidget.setCurrentIndex(4)
 
@@ -1642,8 +1397,6 @@ QFrame{
         # Return in correct float format
         return float(f"{hours}.{minutes:02d}")
     
-    
-
 
     def plot_units_per_week_treemap(self):
         total_units=self.get_units_per_week()
@@ -1683,10 +1436,7 @@ QFrame{
         resources=int(self.assmb_res_le.text())+int(self.fab_res_le.text())
         assembly=(assembly_time_for_cpu*2)/int(self.assmb_res_le.text())
         units=int(self.unit_le.text())
-        # machining_time_b=round((float(self.b_time_for_cpu)+assembly+handling_time_for_cpu)/60*cost*resources*units,2)
-        # machining_time_bc=round((float(self.bc_time_for_cpu)+assembly+handling_time_for_cpu)/60*cost*resources*units,2)
-        # machining_time_bp=round((float(self.bp_time_for_cpu)+assembly+handling_time_for_cpu)/60*cost*resources*units,2)
-        # machining_time_bpc=round((float(self.bpc_time_for_cpu)+assembly+handling_time_for_cpu)/60*cost*resources*units,2)
+        
         machining_time_b = round(((float(self.b_time_for_cpu) / units + assembly + handling_time_for_cpu) / 60) * cost * resources*units, 2)
         machining_time_bc = round(((float(self.bc_time_for_cpu) / units + assembly + handling_time_for_cpu) / 60) * cost * resources*units, 2)
         machining_time_bp = round(((float(self.bp_time_for_cpu) / units + assembly + handling_time_for_cpu) / 60) * cost * resources*units, 2)
@@ -1697,15 +1447,7 @@ QFrame{
         machining_time_bpctt = round(((float(self.bpc_time_for_cpu) / units + assembly + handling_time_for_cpu) / 60) * cost * 1*1, 2)
 
         print(f"cost per unit is {machining_time_b} {machining_time_bc} {machining_time_bp} {machining_time_bpc}")
-        # print(round((float(self.b_time_for_cpu)+assembly_time_for_cpu+handling_time_for_cpu)/60))
-        # print(round((float(self.bc_time_for_cpu)+assembly_time_for_cpu+handling_time_for_cpu)/60))
-        # print(round((float(self.bp_time_for_cpu)+assembly_time_for_cpu+handling_time_for_cpu)/60))
-        # print(round((float(self.bpc_time_for_cpu)+assembly_time_for_cpu+handling_time_for_cpu)/60))
-
-
         
-
-
         # values_bar1=[209.0,107.4,117.5,86.6]
         values_bar1=[machining_time_b,machining_time_bc,machining_time_bp,machining_time_bpc]
         tooltip_values=[machining_time_btt,machining_time_bctt,machining_time_bptt,machining_time_bpctt]
@@ -1728,8 +1470,6 @@ QFrame{
         secax.set_ticks(tick_positions)
         secax.set_yticklabels([f'{p:.1f}%' for p in percentages],fontweight='bold',fontsize=8)
         secax.set_ylabel('Savings (%)')
-
-
 
         self.canvas2.axes3.set_title(f"Man-Hours cost for {units} units",fontsize=14)
         bars1=self.canvas2.axes3.bar(labels_bar1,[expensive_type]*len(values_bar1),width=0.5,color='#b2e580',edgecolor='black',linewidth=0.5)
@@ -1767,18 +1507,6 @@ QFrame{
             # sel.annotation.set_text(f'{label}\nMax Cost: {cost:.1f}€')
             sel.annotation.set_text(f'{costt}€ per man-hour cost\n {label}€ per unit cost')
 
-        # @cursor2.connect("add")
-        # def on_add_bars2(sel):
-        #     # Get the index of the bar being hovered from bars2
-        #     idx = sel.index
-        #     # Get the label, cost, and savings for the bar
-        #     label = labels_bar1[idx]
-        #     cost = values_bar1[idx]
-        #     saving = savings_percentage[idx]
-        #     # Set the tooltip text for bars2
-        #     sel.annotation.set_text(f'{label}\nCost: {cost:.1f}€\nSavings: {saving:.1f}%')
-
-        # Draw the canvas to update the plot
         self.canvas2.draw()
 
     
@@ -1796,8 +1524,7 @@ QFrame{
             u=int(self.unit_le.text())
         except Exception as e:
             u=7
-        
-        
+            
         if u>1:
             self.assembly_units_label.setText(f"{self.unit_le.text()} units")
         else:
@@ -1810,9 +1537,9 @@ QFrame{
         assembly_time=round((assembly_time_for_one_rsrc/assembly_resources)*units,1)
         self.assembly_time_label.setText(f":{assembly_time} hours")
     
-    def plot_machine_usage(self, type):
+    def plot_machine_usage(self, combination_type):
         self.canvas2.axes2 = self.canvas2.fig.add_subplot(222)
-        machines, time = self.get_machine_time_for_pie(type)
+        machines, time = self.get_machine_time_for_pie(combination_type)
         print("The machines are ",machines)
         print("The time are",time)
         # time[0]=time[0]/2
@@ -1855,31 +1582,19 @@ QFrame{
             fontsize=7
         )
     
-        # Rotate labels to fit better (optional, if you want to keep labels)
-        # for text in texts:
-        #     text.set_rotation(45)
-        #     text.set_fontsize(6)
-        if type=="basic":
+        if combination_type=="basic":
             self.canvas2.axes2.set_title(f"Basic Machine Usage", fontsize=14, pad=10)
-        elif type=="basic+cnc":
+        elif combination_type=="basic+cnc":
             self.canvas2.axes2.set_title(f"Basic+CNC Machine Usage", fontsize=14, pad=10)
-        elif type=="basic+punch":
+        elif combination_type=="basic+punch":
             self.canvas2.axes2.set_title(f"Basic+Punch Machine Usage", fontsize=14, pad=10)
-        elif type=="basic+punch+cnc":
+        elif combination_type=="basic+punch+cnc":
             self.canvas2.axes2.set_title(f"Basic+Punch+CNC Machine Usage", fontsize=14, pad=10)
 
 
-
-
-
-
-        # self.canvas2.fig.tight_layout()  # Improve spacing
-    
-    
-
-    def plot_time_consumption(self,type):
+    def plot_time_consumption(self,combination_type):
         units=int(self.unit_le.text())
-        machine_labels,machine_time=self.get_machine_time_for_pie(type)
+        machine_labels,machine_time=self.get_machine_time_for_pie(combination_type)
         update_time_list=[]
         for i in range(len(machine_time)):
             update_time_list.append(machine_time[i]*units)
@@ -1889,7 +1604,7 @@ QFrame{
             # updated_time=f"{round(update_time_list[i],1)} mins" if update_time_list[i]<=60 else f"{round(update_time_list[i]/60,2)} hours"
             if update_time_list[i]>60:
                 tt=round((update_time_list[i]/60),2)
-                t=self.convert_to_hours_return_string(tt)
+                t=TimeConverter.convert_to_hours(tt,True)
                 updated_time=f" {t} hours"
             else:
                 updated_time=f"{round(update_time_list[i],1)} mins"
@@ -1911,63 +1626,18 @@ QFrame{
         text_content+="-"*(len(header)*2)+f"\n\n                           System  : {system_name}\n\n"+f"                           Type       : {type_name}\n\n"+f"                            Size       :{size}"
         text_obj=self.canvas2.axes4.text(0.3,0.5,text_content.strip(),ha='left',va='center',fontsize=10,color='black',usetex=False)
         self.canvas2.axes4.axis('off')
-        # text_obj.set_picker(5)
-        # cursor=mplcursors.cursor(self.canvas2.axes4,hover=True)
-        # @cursor.connect("add")
-        # def on_add(sel):
-        # # Customize the tooltip content
-        #     print("Hover event triggered")
-        #     sel.annotation.set_text("Hovered Text: Machine Usage Details")
-        #     sel.annotation.get_bbox_patch().set(fc="white", alpha=0.9)  # Tooltip background
-        #     sel.annotation.set_fontsize(9)  
-        # self.canvas2.draw()
-        
-   
-        
-
-        
-
-        
-    def load_bc_charts(self):
-        if not self.isDataFilled:
-            QMessageBox.warning(self,"No data","Please fill the data and try again!")
-            return
-        self.basic_cnc_lp.setChecked(True)
-        self.basic_cnc_rs.setChecked(True)
-        self.basic_cnc_btn.setChecked(True)
-        machine_lables,time_labels=self.get_time_by_single_machine("basic+cnc")
-        time_values=[]
-
-        for i in range(len(time_labels)):
-            time_one_unit=time_labels[i]
-            t=2880/time_one_unit
-            time_values.append(int(t))
-        # print("The time values are ",time_values)
-        if len(time_values)>0:
-            self.min_units=min(time_values)
-        treemap_labels=[]
-        for i in range(len(machine_lables)):
-            treemap_labels.append(f"{machine_lables[i]}\n{time_values[i]} units")
-        
-        layout=self.line_production_widget.layout()
-        if layout is None:
-            layout = QVBoxLayout(self.line_production_widget)
-        if not hasattr(self,"canvas"):
-            self.canvas = MplCanvas(self, width=5, height=4, dpi=100)
-            layout.addWidget(self.canvas)
-        self.plot_data("Basic+CNC",data=time_values,labels=treemap_labels)
-        self.plot_units_per_shift("Basic+CNC")
-        self.total_machining_time()
-        self.plot_units_per_week_treemap()
-        self.plot_cost_per_unit("basic+cnc")
-        self.plot_machine_usage("basic+cnc")
-        self.plot_time_consumption("basic+cnc")
-        self.plot_idle_hours("basic+cnc")
-        self.total_assembly_time()
 
     def total_machining_time(self):
         try:
-            total_time=self.get_total_time()
+            # total_time=self.get_total_time()
+            units = GetData(self).get_units()
+            machine_time_data = {
+                "basic": self.time_taken_by_machine["basic"],
+                "basic+cnc": self.time_taken_by_machine["basic+cnc"],
+                "basic+punch": self.time_taken_by_machine["basic+punch"],
+                "basic+punch+cnc": self.time_taken_by_machine["basic+punch+cnc"],
+            }
+            total_time = TotalTimeCalculator(machine_time_data, units).get_all_totals()
             print("The total time issssssssss ",total_time)
             self.b_time_for_cpu=total_time["basic"]
             self.bc_time_for_cpu=total_time["basic_cnc"]
@@ -1978,10 +1648,10 @@ QFrame{
             b=round((total_time["basic_cnc"]/60),2)
             c=round((total_time["basic_punch"]/60),2)
             d=round((total_time["basic_punch_cnc"]/60),2)
-            total_time_b=self.convert_to_hours_return_float(a)
-            total_time_bc=self.convert_to_hours_return_float(b)
-            total_time_bp=self.convert_to_hours_return_float(c)
-            total_time_bpc=self.convert_to_hours_return_float(d)
+            total_time_b=TimeConverter.convert_to_hours(a)
+            total_time_bc=TimeConverter.convert_to_hours(b)
+            total_time_bp=TimeConverter.convert_to_hours(c)
+            total_time_bpc=TimeConverter.convert_to_hours(d)
         except ZeroDivisionError:
             total_time_b=0
             total_time_bc=0
@@ -2002,143 +1672,50 @@ QFrame{
         self.basic_punch_label_2.setText(f":{total_time_bp} hours")
         self.basic_punch_cnc_label_2.setText(f":{total_time_bpc} hours")
 
-
-    def load_bp_charts(self):
+    def load_chart_group(self, combo_key: str, button_group: list, chart_title: str):
         if not self.isDataFilled:
             QMessageBox.warning(self,"No data","Please fill the data and try again!")
             return
-        self.basic_punch_lp.setChecked(True)
-        self.basic_punch_rs.setChecked(True)
-        self.basic_punch_btn.setChecked(True)
-        machine_lables,time_labels=self.get_time_by_single_machine("basic+punch")
-        time_values=[]
-
-        for i in range(len(time_labels)):
-            time_one_unit=time_labels[i]
-            t=2880/time_one_unit
-            time_values.append(int(t))
-        # print("The time values are ",time_values)
-        if len(time_values)>0:
-            self.min_units=min(time_values)
-        treemap_labels=[]
-        for i in range(len(machine_lables)):
-            treemap_labels.append(f"{machine_lables[i]}\n{time_values[i]} units")
         
-        layout=self.line_production_widget.layout()
+        # Update machine time using current spinbox values
+        machine_manager = MachineManager(self)
+        machine_manager.modify_machine_times(self.time_taken_by_machine, self.original_machine_times)
+
+        # Update button states
+        ButtonStateManager(button_group).set_all_checked()
+
+        # Get time data for the selected combo type
+        time_data = self.time_taken_by_machine.get(combo_key, {})
+        machine_labels, time_labels = MachineTimeFormatter(time_data).get_times_in_mins()
+
+        # Calculate units per week
+        units_per_week = CalculateWeeklyUnits(time_labels).calculate_units()
+        self.min_units = UnitStatistics.get_min(units_per_week)
+
+        # Format treemap labels
+        treemap_labels = TreeMapLabelFormatter.format(machine_labels, units_per_week)   
+
+        # Ensure canvas exists
+        layout = self.line_production_widget.layout()
         if layout is None:
             layout = QVBoxLayout(self.line_production_widget)
-        if not hasattr(self,"canvas"):
+        if not hasattr(self, "canvas"):
             self.canvas = MplCanvas(self, width=5, height=4, dpi=100)
             layout.addWidget(self.canvas)
-        self.plot_data("Basic+Punch",data=time_values,labels=treemap_labels)
-        self.plot_units_per_shift("Basic+Punch")
-        self.total_machining_time()
-        self.plot_units_per_week_treemap()
-        self.plot_cost_per_unit("basic+punch")
-        self.plot_machine_usage("basic+punch")
-        self.plot_time_consumption("basic+punch")
-        self.plot_idle_hours("basic+punch")
-        self.total_assembly_time()
 
-    def load_bpc_charts(self):
-        if not self.isDataFilled:
-            QMessageBox.warning(self,"No data","Please fill the data and try again!")
-            return
-        self.basic_punch_cnc_lp.setChecked(True)
-        self.basic_punch_cnc_rs.setChecked(True)
-        self.basic_punch_cnc_btn.setChecked(True)
-        machine_lables,time_labels=self.get_time_by_single_machine("basic+punch+cnc")
-        time_values=[]
-
-        for i in range(len(time_labels)):
-            time_one_unit=time_labels[i]
-            t=2880/time_one_unit
-            time_values.append(int(t))
-        # print("The time values are ",time_values)
-        if len(time_values)>0:
-            self.min_units=min(time_values)
-        treemap_labels=[]
-        for i in range(len(machine_lables)):
-            treemap_labels.append(f"{machine_lables[i]}\n{time_values[i]} units")
-        
-        layout=self.line_production_widget.layout()
-        if layout is None:
-            layout = QVBoxLayout(self.line_production_widget)
-        if not hasattr(self,"canvas"):
-            self.canvas = MplCanvas(self, width=5, height=4, dpi=100)
-            layout.addWidget(self.canvas)
-        self.plot_data("Basic+Punch+CNC",data=time_values,labels=treemap_labels)
-        self.plot_units_per_shift("Basic+Punch+CNC")
-        self.total_machining_time()
-        self.plot_units_per_week_treemap()
-        self.plot_cost_per_unit("basic+punch+cnc")
-        self.plot_machine_usage("basic+punch+cnc")
-        self.plot_time_consumption("basic+punch+cnc")
-        self.plot_idle_hours("basic+punch+cnc")
-        self.total_assembly_time()
+        # Plot charts
+        ChartPlotManager(self, self.canvas, units_per_week, treemap_labels, chart_title).plot_all_charts()
 
 
     def clear_data(self,machining_table,assembly_table,handling_table):
-        # pyqt_path=os.path.join(os.path.dirname(PyQt6.__file__),"Qt6","plugins")
-        # print(pyqt_path)
+        
         self.isDataFilled=False
-        self.machining_time_le.setText("0")
-        self.assembly_time_le.setText("0")
-        self.handling_time_le.setText("0")
-        # self.installation_time_le.setText("0")
-        self.total_time_le.setText("0")
-        self.total_time_le_2.setText("0")
-        # self.curing_time_le.setText("0")
-        # self.setup_time_le.setText("0")
-        for row in range(machining_table.rowCount()):
-            for col in range(machining_table.columnCount()):
-                cell_widget=machining_table.cellWidget(row,col)
-                if isinstance(cell_widget,QComboBox):
-                    if cell_widget.count()>0:
-                        cell_widget.setCurrentIndex(0)
-                if row==machining_table.rowCount()-1 and col>=1:
-                # if row==3 and col>=1:
-                    item=machining_table.item(row,col)
-                    if item:
-                        item.setText("")
-        for row in range(assembly_table.rowCount()):
-            for col in range(assembly_table.columnCount()):
-                cell_widget=assembly_table.cellWidget(row,col)
-                if isinstance(cell_widget,QComboBox):
-                    if cell_widget.count()>0:
-                        cell_widget.setCurrentIndex(0)
-                elif isinstance(cell_widget,QLineEdit):
-                    cell_widget.setText("")
-                if col>=1:
-                    item=assembly_table.item(row,col)
-                    if item:
-                        item.setText("0 minutes")
-        for row in range(handling_table.rowCount()):
-            for col in range(handling_table.columnCount()):
-                cell_widget=handling_table.cellWidget(row,col)
-                if isinstance(cell_widget,QComboBox):
-                    if cell_widget.count()>0:
-                        cell_widget.setCurrentIndex(0)
-                elif isinstance(cell_widget,QLineEdit):
-                    cell_widget.setText("")
-                if col>=1:
-                    item=handling_table.item(row,col)
-                    if item:
-                        item.setText("0 minutes")
-        # for row in range(installation_table.rowCount()):
-        #     for col in range(installation_table.columnCount()):
-        #         cell_widget=installation_table.cellWidget(row,col)
-        #         if isinstance(cell_widget,QComboBox):
-        #             if cell_widget.count()>0:
-        #                 cell_widget.setCurrentIndex(0)
-        #         elif isinstance(cell_widget,QLineEdit):
-        #             cell_widget.setText("")
-        #         if col>=1:
-        #             item=installation_table.item(row,col)
-        #             if item:
-        #                 item.setText("0 minutes")
-        self.machining_table.cellWidget(7,13).setText("")
-    
+
+        line_edits = [self.machining_time_le, self.assembly_time_le, self.handling_time_le, self.total_time_le, self.total_time_le_2]
+        LineEditCleaner(line_edits).clear()
+        TableDataCleaner(machining_table).clear()
+        TableDataCleaner(assembly_table,False).clear()
+        TableDataCleaner(handling_table,False).clear()
 
     def set_combo_to_table_cell(self):
         combo=self.get_combo()
@@ -2158,26 +1735,26 @@ QFrame{
         combo.addItems(["⌀6","⌀8","⌀10","⌀12","⌀14","⌀16"])
         self.machining_table.setCellWidget(0,13,combo)
         combo=self.get_combo()
-        combo.addItems(["2Hsaw","1Hsaw"])
+        combo.addItems([DOUBLE_MITER_SAW,SINGLE_MITER_SAW])
         self.machining_table.setCellWidget(1,1,combo)
         for i in range(7):
             combo=self.get_combo()
-            combo.addItems(["CNC","Router"])
+            combo.addItems([CNC,COPY_ROUTER])
             self.machining_table.setCellWidget(1,i+2,combo)
         combo=self.get_combo()
-        combo.addItems(["CNC","DrillingM/C","Punch","Jig"])
+        combo.addItems([CNC,DRILLING_MACHINE,PUNCH,JIG])
         self.machining_table.setCellWidget(1,9,combo)
         combo=self.get_combo()
-        combo.addItems(["CNC","DrillingM/C"])
+        combo.addItems([CNC,DRILLING_MACHINE])
         self.machining_table.setCellWidget(1,10,combo)
         combo=self.get_combo()
-        combo.addItems(["CNC","NotchingSaw","Punch"])
+        combo.addItems([CNC,NOTCHING_SAW,PUNCH])
         self.machining_table.setCellWidget(1,11,combo)
         combo=self.get_combo()
-        combo.addItems(["CNC","EndMill","Punch"])
+        combo.addItems([CNC,ENDMILL,PUNCH])
         self.machining_table.setCellWidget(1,12,combo)
         combo=self.get_combo()
-        combo.addItems(["CNC","Router"])
+        combo.addItems([CNC,COPY_ROUTER])
         self.machining_table.setCellWidget(1,13,combo)
         item=self.get_text_item("Profile Cutting")
         self.machining_table.setItem(2, 1, item)
@@ -2187,30 +1764,7 @@ QFrame{
         self.machining_table.setItem(2,11,item)
         self.machining_table.setItem(2,12,self.get_text_item("Vertical jamb and interlock frames etc..."))
         self.machining_table.setItem(2,13,self.get_text_item("Retaining catch slot/ L joint 70mm milling vertical vent frames etc..."))
-        # combo=self.get_combo()
-        # combo.setEditable(True)
-        # combo.addItem("mins")
-        # combo.setCurrentIndex(0)
-        # combo.model().item(0).setEnabled(False)
-        # combo.addItems(["10 mins","20 mins","30 mins"])
-        # self.assembly_table.setCellWidget(0,1,combo)
-        # combo=self.get_combo()
-        # combo.setEditable(True)
-        # combo.addItem("mins")
-        # combo.setCurrentIndex(0)
-        # combo.model().item(0).setEnabled(False)
-        # combo.addItems(["20 mins","30 mins"])
-        # self.assembly_table.setCellWidget(1,1,combo)
-        # combo=self.get_combo()
-        # combo.setEditable(True)
-        # combo.addItem("hrs")
-        # combo.setCurrentIndex(0)
-        # combo.model().item(0).setEnabled(False)
-        # combo.addItems(["1 hour","2 hours","3 hours"])
-        # self.assembly_table.setCellWidget(4,1,combo)
-
-
-       
+        
 
     def get_text_item(self,text):
         item=QTableWidgetItem(text)
@@ -2237,7 +1791,7 @@ QFrame{
         self.machining_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.machining_table.verticalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
     def cal_machining_assemb_handling_install(self):
-        self.calculate_fabrication_time(0,1,7)
+        self.calculate_fabrication_time(MACHINE,ROW_ROW3,ROW_ROW4,ROW_ROW5,ROW_ROW6,ROW_ROW7, ROW_ROW8)
         self.append_mins()
         self.append_hours()
         self.calculate_assembly_time()
@@ -2245,263 +1799,323 @@ QFrame{
         # self.calculate_installation_time()
         self.total_time()
     # code to calculate fabrication time
-    def calculate_fabrication_time(self,row0,row1,row3):
+    
+    def calculate_fabrication_time(self,row1,row3,row4,row5,row6,row7,row8):
         self.isDataFilled=True
-        
         # 0,1,2,4
-        basic=["NotchingSaw","EndMill","DrillingM/C","2Hsaw","Router"]
-        basic_cnc=["2Hsaw","CNC","DrillingM/C","EndMill"]
-        basic_punch=["Punch","NotchingSaw","DrillingM/C","2Hsaw","Router","EndMill"]
-        basic_punch_cnc=["Punch","NotchingSaw","2Hsaw","CNC","EndMill"]
-        self.cal_basic_time(basic,row0,row1,row3)
-        self.cal_cnc_time(basic_cnc,row0,row1,row3)
-        self.cal_punch_time(basic_punch,row0,row1,row3)
-        self.cal_b_p_c_time(basic_punch_cnc,row0,row1,row3)
+        basic=[NOTCHING_SAW,ENDMILL,DRILLING_MACHINE,DOUBLE_MITER_SAW,COPY_ROUTER]
+        basic_cnc=[DOUBLE_MITER_SAW,CNC,DRILLING_MACHINE,ENDMILL]
+        basic_punch=[PUNCH,NOTCHING_SAW,DRILLING_MACHINE,DOUBLE_MITER_SAW,COPY_ROUTER,ENDMILL]
+        basic_punch_cnc=[PUNCH,NOTCHING_SAW,DOUBLE_MITER_SAW,CNC,ENDMILL]
+        # self.cal_basic_time(basic,row0,row1,row7)
+        self.cal_basic_time(basic,row1,row3,row4,row5,row6,row7,row8)
+        # self.cal_cnc_time(basic_cnc,row0,row1,row7)
+        self.cal_cnc_time(basic_cnc,row1,row3,row4,row5,row6,row7, row8)
+        self.cal_punch_time(basic_punch,row1,row3,row4,row5,row6,row7, row8)
+        self.cal_b_p_c_time(basic_punch_cnc,row1,row3,row4,row5,row6,row7, row8)
 
-        time_taken=0
-        for i in range(1,self.machining_table.columnCount()):
-            d=self.machining_table.item(row3,i)
-            if i==13:
-                d=self.machining_table.cellWidget(row3,i)
-            
-            if d is not None and d.text().isdigit():
-                no_of_opr=d.text()
-                operation=self.machining_table.horizontalHeaderItem(i).text().strip().lower().replace(" ","") # This line extracts operation
-                operation_type=self.machining_table.cellWidget(row0,i).currentText().strip().lower().replace(" ","") # This line extracts wall from combo box
-                machine=self.machining_table.cellWidget(row1,i).currentText().strip() # This line extracts machine from combo box
-                time_for_single_op=self.time_data.get((operation,operation_type,machine))
-                time_for_multiple_op=int(time_for_single_op)*int(no_of_opr)
-                time_taken+=time_for_multiple_op
-                # print("The time taken for multiple operations is ",time_for_multiple_op)
-        fab_time=time_taken/60
-        # self.convert_to_hours(fab_time)
-        self.f=f"{fab_time:.1f}"
-        
-        if time_taken>60:
-            print("Total seconds ",time_taken)
-            time_taken=round(time_taken/60,1)
-            print("Total minutes ",time_taken)
+        time_taken = 0
+
+        for i in range(1, self.machining_table.columnCount()):
+            # operation = self.machining_table.horizontalHeaderItem(i).text().strip().lower().replace(" ", "")
+            operation = self.normalize_text(self.machining_table.horizontalHeaderItem(i).text())
+            machine = self.machining_table.cellWidget(row1, i).currentText().strip()
+
+            for row in [row3, row4, row5, row6, row7, row8]:  # Include all rows you want to check
+                cell_widget = self.machining_table.cellWidget(row, i)
+
+                if isinstance(cell_widget, QLineEdit):
+                    text = cell_widget.text().strip()
+                    placeholder = cell_widget.placeholderText().strip().lower().replace(" ", "") if i!=self.machining_table.columnCount()-1 else cell_widget.placeholderText().strip().lower().replace(" in mm","")
+                    if text.isdigit():
+                        no_of_opr = int(text)
+                        operation_type = placeholder  # Use the placeholder text as the operation type
+                        key = (operation, operation_type, machine)
+                        time_for_single_op = self.time_data.get(key)
+
+                        if time_for_single_op is not None:
+                            total = int(time_for_single_op) * no_of_opr
+                            time_taken += total
+                else:
+                    item = self.machining_table.item(row, i)
+                    if item and item.text().strip().isdigit():
+                        no_of_opr = int(item.text().strip())
+                        operation_type = self.machining_table.verticalHeaderItem(row).text().strip().lower().replace(" ", "")
+                        key = (operation, operation_type, machine)
+                        time_for_single_op = self.time_data.get(key)
+
+                        if time_for_single_op is not None:
+                            total = int(time_for_single_op) * no_of_opr
+                            time_taken += total
+
+        fab_time = time_taken / 60
+        self.f = f"{fab_time:.1f}"
+
+        if time_taken > 60:
+            print("Total seconds ", time_taken)
+            time_taken = round(time_taken / 60, 1)
+            print("Total minutes ", time_taken)
             self.machining_time_le.setText(f"{time_taken} mins")
         else:
             self.machining_time_le.setText(f"{time_taken} seconds")
-        if time_taken>60:
-            time_taken=round(time_taken/60,2)
-            print("Total hours before conversion ",time_taken)
-            total_time=self.convert_to_hours(time_taken)
-            print("Total hours after conversion ",total_time)
+
+        if time_taken > 60:
+            time_taken = round(time_taken / 60, 2)
+            print("Total hours before conversion ", time_taken)
+            total_time = TimeConverter.convert_to_hours(time_taken, return_string=True)
+            print("Total hours after conversion ", total_time)
             self.machining_time_le.setText(f"{total_time} hours")
     
+    
+    def cal_basic_time(self, machining_type, machine_row, *data_rows):
+        time_taken_by_machine = {}
 
-    def cal_basic_time(self,type,row0,row1,row3):
-        time_taken=0
-        time_taken_by_machine={}
-        for i in range(1,self.machining_table.columnCount()):
-            # no_of_op=self.machining_table.item(row3,i)
-            cell_widget = self.machining_table.cellWidget(row3, i)
-            if isinstance(cell_widget,QLineEdit):
-                no_of_ops=cell_widget.text().strip()
+        # Get column count
+        col_count = self.machining_table.columnCount()
+
+        # Loop through each column in the table starting from column 1
+        for col in range(1, col_count):  # Skip first column (index 0)
+            operation=self.normalize_text(self.machining_table.horizontalHeaderItem(col).text())
+            machine_combo = self.machining_table.cellWidget(machine_row, col)
+
+            # Skip if machine combo box is missing
+            if not isinstance(machine_combo, QtWidgets.QComboBox):
+                continue 
+
+            for row in data_rows:
+                operation_type,value=self._get_operation_info(row,col,self.machining_table)
+                # Skip empty or invalid cells
+                if not value or not value.isdigit():
+                    continue  
+
+                # Convert value to integer
+                no_of_opr = int(value)
+                self._accumulate_machine_times(machining_type, machine_combo, operation, operation_type, no_of_opr, time_taken_by_machine)
+
+        total_time=sum(time_taken_by_machine.values())
+        # self.set_machining_time("basic", time_taken_by_machine)
+        MachiningTimeManager(self.time_taken_by_machine).set_time_for_type(BASIC,time_taken_by_machine)
+        MachiningTimeManager(self.original_machine_times).set_time_for_type(BASIC, time_taken_by_machine)
+        print("Time taken by basic in secs is", total_time, time_taken_by_machine)
+
+
+    def normalize_text(self,text)->str:
+        return text.strip().lower().replace(" ","").replace("inmm","")
+    
+    def _get_operation_info(self,row,col,table):
+        cell_widget=table.cellWidget(row, col)
+        value=""
+        operation_type=""
+
+        if isinstance(cell_widget, QLineEdit):
+            value=cell_widget.text().strip()
+            palceholder=cell_widget.placeholderText()
+            operation_type=self.normalize_text(palceholder)
+        else:
+            item=table.item(row, col)
+            if item:
+                value=item.text().strip()
+                vh_item=table.verticalHeaderItem(row)
+                if vh_item:
+                    operation_type=self.normalize_text(vh_item.text())
+        return operation_type,value
+    
+    def _accumulate_machine_times(self,allowed_types,machine_combo,operation,operation_type,no_of_opr,time_dict):
+        for j in range(machine_combo.count()):
+            machine=machine_combo.itemText(j).strip()
+            if machine not in allowed_types:
+                continue
+
+            key=(operation,operation_type,machine)
+            time_for_single_op=self.time_data.get(key)
+
+            if time_for_single_op is None:
+                continue
+
+            total_time=int(time_for_single_op)*no_of_opr
+            time_dict[machine]=time_dict.get(machine,0)+total_time
+
+    def _accumulate_machine_times_cnc(self,allowed_types,machine_combo,operation,operation_type,no_of_opr,time_dict):
+        flag=False
+        for j in range(machine_combo.count()):
+            machine = machine_combo.itemText(j).strip()
+            if machine not in allowed_types:
+                continue
+            if operation == "cornercleathole":
+                if not flag:
+                    machine = CNC
+                    flag = True
+                else:
+                    continue
+            elif operation == "endmilling":
+                machine=ENDMILL
             else:
-                item = self.machining_table.item(row3, i)
-                no_of_ops = item.text().strip() if item else ""
-            # if no_of_op is not None and no_of_op.text().isdigit():
-            if no_of_ops.isdigit():
-                # no_of_ops=no_of_op.text()
-                operation=self.machining_table.horizontalHeaderItem(i).text().strip().lower().replace(" ","")
-                operation_type=self.machining_table.cellWidget(row0,i).currentText().strip().lower().replace(" ","")
-                machine_combo=self.machining_table.cellWidget(row1,i)
-                if isinstance(machine_combo,QtWidgets.QComboBox):
-                        for j in range(machine_combo.count()):
-                            item_text=machine_combo.itemText(j).strip()
-                            if item_text in type:
-                                time_for_single_op=self.time_data.get((operation,operation_type,item_text))
-                                time_for_multiple_op=int(time_for_single_op)*int(no_of_ops)
-                                time_taken+=time_for_multiple_op
-                                if item_text not in time_taken_by_machine:
-                                    time_taken_by_machine[item_text]=0
-                                time_taken_by_machine[item_text]+=time_for_multiple_op
-        self.set_machining_time("basic",time_taken_by_machine)                    
-        print("Time taken by basic in secs is ",time_taken," ",time_taken_by_machine)
+                if machine in {DRILLING_MACHINE,ENDMILL}:
+                    continue
+                
+            key = (operation,operation_type,machine)
+            time_for_single_op=self.time_data.get(key)
 
-    def cal_cnc_time(self,type,row0,row1,row3):
-        time_taken=0
+            if time_for_single_op is None:
+                continue
+
+            total_time = int(time_for_single_op)*no_of_opr
+            time_dict[machine] = time_dict.get(machine,0)+total_time
+
+    def __accumulate_machine_times_bpc(self,allowed_types,machine_combo,operation,operation_type,no_of_opr,time_dict):
+        for j in range(machine_combo.count()):
+            machine = machine_combo.itemText(j).strip()
+            if machine not in allowed_types:
+                continue
+
+            if operation == "notching":
+                machine = PUNCH
+
+            elif operation == "drillinghole":    
+                machine = CNC
+
+            elif operation == "cornercleathole":
+                machine = PUNCH
+            
+            elif operation == "endmilling":
+                machine = ENDMILL
+            
+            elif operation == "freehandmilling":
+                machine = CNC
+            
+            key = (operation, operation_type, machine)
+            time_for_single_op = self.time_data.get(key)
+
+            if time_for_single_op is None:
+                continue
+
+            total_time = int(time_for_single_op) * no_of_opr
+            time_dict[machine] = time_dict.get(machine, 0) + total_time
+
+    def __accumulate_machine_times_bp(self,allowed_types,machine_combo,operation,operation_type,no_of_opr,time_dict):
+        for j in range(machine_combo.count()):
+            machine = machine_combo.itemText(j).strip()
+            if machine not in allowed_types:
+                continue
+
+            if operation == "notching":
+                machine = PUNCH
+            
+            elif operation == "drillinghole":
+                machine = DRILLING_MACHINE
+            
+            elif operation == "freehandmilling":
+                machine = COPY_ROUTER
+
+            elif operation == "cornercleathole":
+                machine = PUNCH
+
+            elif operation == "endmilling":
+                machine = ENDMILL
+
+            key = (operation, operation_type, machine)
+            time_for_single_op = self.time_data.get(key)
+
+            
+            if time_for_single_op is None:
+                continue
+
+            total_time = int(time_for_single_op) * no_of_opr
+            time_dict[machine] = time_dict.get(machine, 0) + total_time
+            
+
+    def cal_cnc_time(self, machining_type, machine_row, *data_rows):
         time_taken_by_machine={}
-        for i in range(1,self.machining_table.columnCount()):
-            # no_of_op=self.machining_table.item(row3,i)
-            cell_widget = self.machining_table.cellWidget(row3, i)
-            if isinstance(cell_widget,QLineEdit):
-                no_of_ops=cell_widget.text().strip()
-            else:
-                item = self.machining_table.item(row3, i)
-                no_of_ops = item.text().strip() if item else ""
-            # if no_of_op is not None and no_of_op.text().isdigit():
-            if no_of_ops.isdigit():
-
-                operation=self.machining_table.horizontalHeaderItem(i).text().strip().lower().replace(" ","")
-                operation_type=self.machining_table.cellWidget(row0,i).currentText().strip().lower().replace(" ","")
-                machine_combo=self.machining_table.cellWidget(row1,i)
-                if isinstance(machine_combo,QtWidgets.QComboBox):
-                    if operation=="cornercleathole":
-                        item_text="CNC"
-                        time_for_single_op=self.time_data.get((operation,operation_type,item_text))
-                        time_for_multiple_op=int(time_for_single_op)*int(no_of_ops)
-                        time_taken+=time_for_multiple_op
-                        if item_text not in time_taken_by_machine:
-                                time_taken_by_machine[item_text]=0
-                        time_taken_by_machine[item_text]+=time_for_multiple_op
-                    elif operation=="endmilling":
-                        item_text="EndMill"
-                        time_for_single_op=self.time_data.get((operation,operation_type,item_text))
-                        time_for_multiple_op=int(time_for_single_op)*int(no_of_ops)
-                        time_taken+=time_for_multiple_op
-                        if item_text not in time_taken_by_machine:
-                                time_taken_by_machine[item_text]=0
-                        time_taken_by_machine[item_text]+=time_for_multiple_op
-                    
-                   
-                    else:
-                        for i in range(machine_combo.count()):
-                            item_text=machine_combo.itemText(i).strip()
-                            if item_text in type and item_text!="DrillingM/C" and item_text!="EndMill":
-                                time_for_single_op=self.time_data.get((operation,operation_type,item_text))
-                                time_for_multiple_op=int(time_for_single_op)*int(no_of_ops)
-                                time_taken+=time_for_multiple_op
-                                if item_text not in time_taken_by_machine:
-                                    time_taken_by_machine[item_text]=0
-                                time_taken_by_machine[item_text]+=time_for_multiple_op
-
-        self.set_machining_time("basic+cnc",time_taken_by_machine)
-        print("Time taken by basic+cnc in secs is ",time_taken," ",time_taken_by_machine)
+        col_count=self.machining_table.columnCount()
         
-    def cal_punch_time(self,type,row0,row1,row3):
-        time_taken=0
-        time_taken_by_machine={}
-        def time_for_each_machine(machine):
-            if machine not in time_taken_by_machine:
-                time_taken_by_machine[machine]=0
-            time_taken_by_machine[machine]+=time_for_multiple_op
+
+        for col in range(1, col_count):
+            operation=self.normalize_text(self.machining_table.horizontalHeaderItem(col).text())
+            machine_combo=self.machining_table.cellWidget(machine_row, col)
+
+            # Skip if machine combo box is missing
+            if not isinstance(machine_combo, QtWidgets.QComboBox):
+                continue
+
+            for row in data_rows:
+                operation_type,value=self._get_operation_info(row,col,self.machining_table)
+                # Skip empty or invalid cells
+                if not value or not value.isdigit():
+                    continue  
+
+                # Convert value to integer
+                no_of_opr = int(value)
+                self._accumulate_machine_times_cnc(machining_type, machine_combo, operation, operation_type, no_of_opr, time_taken_by_machine)
+        total_time=sum(time_taken_by_machine.values())
+        # self.set_machining_time("basic+cnc",time_taken_by_machine)
+        MachiningTimeManager(self.time_taken_by_machine).set_time_for_type(BASIC_CNC,time_taken_by_machine)
+        MachiningTimeManager(self.original_machine_times).set_time_for_type(BASIC_CNC,time_taken_by_machine)
+        # self.original_machine_times[BASIC_CNC] = copy.deepcopy(time_taken_by_machine)
+
+        print("Time taken by basic+cnc in secs is ",total_time," ",time_taken_by_machine)
         
-        for i in range(1,self.machining_table.columnCount()):
-            # no_of_op=self.machining_table.item(row3,i)
-            cell_widget = self.machining_table.cellWidget(row3, i)
-            if isinstance(cell_widget,QLineEdit):
-                no_of_ops=cell_widget.text().strip()
-            else:
-                item = self.machining_table.item(row3, i)
-                no_of_ops = item.text().strip() if item else ""
-
-            # if no_of_op is not None and no_of_op.text().isdigit():
-            if no_of_ops.isdigit():
-                # no_of_ops=no_of_op.text()
-                operation=self.machining_table.horizontalHeaderItem(i).text().strip().lower().replace(" ","")
-                operation_type=self.machining_table.cellWidget(row0,i).currentText().strip().lower().replace(" ","")
-                machine_combo=self.machining_table.cellWidget(row1,i)
-                if isinstance(machine_combo,QtWidgets.QComboBox):
-                    if operation=="notching":
-                        item_text="Punch"
-                        time_for_single_op=self.time_data.get((operation,operation_type,item_text))
-                        time_for_multiple_op=int(time_for_single_op)*int(no_of_ops)
-                        time_taken+=time_for_multiple_op
-                        time_for_each_machine(item_text)
-                    elif operation=="drillinghole":
-                        item_text="DrillingM/C"
-                        time_for_single_op=self.time_data.get((operation,operation_type,item_text))
-                        time_for_multiple_op=int(time_for_single_op)*int(no_of_ops)
-                        time_taken+=time_for_multiple_op
-                        time_for_each_machine(item_text)
-                    elif operation=="freehandmilling":
-                        item_text="Router"
-                        time_for_single_op=self.time_data.get((operation,operation_type,item_text))
-                        time_for_multiple_op=int(time_for_single_op)*int(no_of_ops)
-                        time_taken+=time_for_multiple_op
-                        time_for_each_machine(item_text)
-                    elif operation=="cornercleathole":
-                        item_text="Punch"
-                        time_for_single_op=self.time_data.get((operation,operation_type,item_text))
-                        time_for_multiple_op=int(time_for_single_op)*int(no_of_ops)
-                        time_taken+=time_for_multiple_op
-                        time_for_each_machine(item_text)
-                    elif operation=="endmilling":
-                        item_text="EndMill"
-                        time_for_single_op=self.time_data.get((operation,operation_type,item_text))
-                        time_for_multiple_op=int(time_for_single_op)*int(no_of_ops)
-                        time_taken+=time_for_multiple_op
-                        time_for_each_machine(item_text)
-                    else:
-                        for i in range(machine_combo.count()):
-                            item_text=machine_combo.itemText(i).strip()
-                            if item_text in type:
-                                time_for_single_op=self.time_data.get((operation,operation_type,item_text))
-                                time_for_multiple_op=int(time_for_single_op)*int(no_of_ops)
-                                time_taken+=time_for_multiple_op
-                                time_for_each_machine(item_text)
-        print("Time taken by basic punch ",time_taken_by_machine)
-        self.set_machining_time("basic+punch",time_taken_by_machine)
-
-    def cal_b_p_c_time(self,type,row0,row1,row3):
-        time_taken=0
+    
+    def cal_punch_time(self,machining_type,machine_row,*data_rows):
         time_taken_by_machine={}
-        def time_for_each_machine(machine):
-            if machine not in time_taken_by_machine:
-                time_taken_by_machine[machine]=0
-            time_taken_by_machine[machine]+=time_for_multiple_op
-        for i in range(1,self.machining_table.columnCount()):
-            # no_of_op=self.machining_table.item(row3,i)
-            cell_widget = self.machining_table.cellWidget(row3, i)
-            if isinstance(cell_widget,QLineEdit):
-                no_of_ops=cell_widget.text().strip()
-            else:
-                item = self.machining_table.item(row3, i)
-                no_of_ops = item.text().strip() if item else ""
-            # if no_of_op is not None and no_of_op.text().isdigit():
-            if no_of_ops.isdigit():
-                # no_of_ops=no_of_op.text()
-                operation=self.machining_table.horizontalHeaderItem(i).text().strip().lower().replace(" ","")
-                operation_type=self.machining_table.cellWidget(row0,i).currentText().strip().lower().replace(" ","")
-                machine_combo=self.machining_table.cellWidget(row1,i)
-                if isinstance(machine_combo,QtWidgets.QComboBox):
-                    if operation=="notching":
-                        item_text="Punch"
-                        time_for_single_op=self.time_data.get((operation,operation_type,item_text))
-                        time_for_multiple_op=int(time_for_single_op)*int(no_of_ops)
-                        time_taken+=time_for_multiple_op
-                        time_for_each_machine(item_text)
-                    elif operation=="drillinghole":
-                        item_text="CNC"
-                        time_for_single_op=self.time_data.get((operation,operation_type,item_text))
-                        time_for_multiple_op=int(time_for_single_op)*int(no_of_ops)
-                        time_taken+=time_for_multiple_op
-                        time_for_each_machine(item_text)
-                    elif operation=="cornercleathole":
-                        item_text="Punch"
-                        time_for_single_op=self.time_data.get((operation,operation_type,item_text))
-                        time_for_multiple_op=int(time_for_single_op)*int(no_of_ops)
-                        time_taken+=time_for_multiple_op
-                        time_for_each_machine(item_text)
+        col_count=self.machining_table.columnCount()
 
-                    elif operation=="endmilling":
-                        item_text="EndMill"
-                        time_for_single_op=self.time_data.get((operation,operation_type,item_text))
-                        time_for_multiple_op=int(time_for_single_op)*int(no_of_ops)
-                        time_taken+=time_for_multiple_op
-                        time_for_each_machine(item_text)
-                    elif operation=="freehandmilling":
-                        item_text="CNC"
-                        time_for_single_op=self.time_data.get((operation,operation_type,item_text))
-                        time_for_multiple_op=int(time_for_single_op)*int(no_of_ops)
-                        time_taken+=time_for_multiple_op
-                        time_for_each_machine(item_text)
+        for col in range(1,col_count):
+            operation=self.normalize_text(self.machining_table.horizontalHeaderItem(col).text())
+            machine_combo=self.machining_table.cellWidget(machine_row, col)
+
+            # Skip if machine combo box is missing
+            if not isinstance(machine_combo,QtWidgets.QComboBox):
+                continue
+
+            for row in data_rows:
+                operation_type,value=self._get_operation_info(row,col,self.machining_table)
+                # Skip empty or invalid cells
+                if not value or not value.isdigit():
+                    continue  
+
+                # Convert value to integer
+                no_of_opr = int(value)
+                self.__accumulate_machine_times_bp(machining_type, machine_combo, operation, operation_type, no_of_opr, time_taken_by_machine)
+
+        total_time=sum(time_taken_by_machine.values())
+        # self.set_machining_time("basic+punch",time_taken_by_machine)
+        MachiningTimeManager(self.time_taken_by_machine).set_time_for_type(BASIC_PUNCH,time_taken_by_machine)
+        MachiningTimeManager(self.original_machine_times).set_time_for_type(BASIC_PUNCH,time_taken_by_machine)
+        # self.original_machine_times[BASIC_PUNCH] = copy.deepcopy(time_taken_by_machine)
+
+        print("The time taken by basic+punch in secs is ",total_time," ",time_taken_by_machine)
 
 
-                    else:
-                        for i in range(machine_combo.count()):
-                            item_text=machine_combo.itemText(i).strip()
-                            if item_text in type:
-                                time_for_single_op=self.time_data.get((operation,operation_type,item_text))
-                                time_for_multiple_op=int(time_for_single_op)*int(no_of_ops)
-                                time_taken+=time_for_multiple_op
-                                time_for_each_machine(item_text)
-        self.set_machining_time("basic+punch+cnc",time_taken_by_machine)                        
-        print("The time taken by basic+punch+cnc in secs is ",time_taken," ",time_taken_by_machine)
+    
+    def cal_b_p_c_time(self,machining_type,machine_row,*data_rows):
+        time_taken_by_machine={}
+        col_count=self.machining_table.columnCount()
+
+        for col in range(1,col_count):
+            operation=self.normalize_text(self.machining_table.horizontalHeaderItem(col).text())
+            machine_combo=self.machining_table.cellWidget(machine_row, col)
+
+            # Skip if machine combo box is missing
+            if not isinstance(machine_combo,QtWidgets.QComboBox):
+                continue
+
+            for row in data_rows:
+                operation_type,value=self._get_operation_info(row,col,self.machining_table)
+                # Skip empty or invalid cells
+                if not value or not value.isdigit():
+                    continue  
+
+                # Convert value to integer
+                no_of_opr=int(value)
+                self.__accumulate_machine_times_bpc(machining_type, machine_combo, operation, operation_type, no_of_opr, time_taken_by_machine)
+
+        total_time=sum(time_taken_by_machine.values())
+        # self.set_machining_time("basic+punch+cnc",time_taken_by_machine)   
+        MachiningTimeManager(self.time_taken_by_machine).set_time_for_type(BASIC_PUNCH_CNC,time_taken_by_machine)
+        MachiningTimeManager(self.original_machine_times).set_time_for_type(BASIC_PUNCH_CNC,time_taken_by_machine)
+        # self.original_machine_times[BASIC_PUNCH_CNC] = copy.deepcopy(time_taken_by_machine)
+                     
+        print("The time taken by basic+punch+cnc in secs is ",total_time," ",time_taken_by_machine)
 
 
 
@@ -2513,6 +2127,8 @@ QFrame{
     def get_time_by_single_machine(self,type):
         machine_labels=list(self.time_taken_by_machine[type].keys())
         machine_time=list(self.time_taken_by_machine[type].values())
+        print("The machine labels are ee", machine_labels)
+        print("The machine time is ee", machine_time)
         time_values=[]
         for i in range(len(machine_time)):
             time=round(machine_time[i]/60,2)
@@ -2523,32 +2139,33 @@ QFrame{
     
 
     def get_total_time(self):
-        units=int(self.unit_le.text())
+        units = GetData(self).get_units()
         tt={}
 
         values=self.time_taken_by_machine["basic"].values()
-        total=round((sum(values)*units)/60,2)
+        # print("The values areeeeeee ",values)
+        # total=round((sum(values)*units)/60,2)
+        total = TimeCalculator(list(values), units).get_total_time()
+        print("The total isss ",total)
         tt["basic"]=total
 
         values=self.time_taken_by_machine["basic+cnc"].values()
-        total=round((sum(values)*units)/60,2)
+        # total=round((sum(values)*units)/60,2)
+        total = TimeCalculator(list(values), units).get_total_time()
         tt["basic_cnc"]=total
 
         values=self.time_taken_by_machine["basic+punch"].values()
-        total=round((sum(values)*units)/60,2)
+        # total=round((sum(values)*units)/60,2)
+        total = TimeCalculator(list(values), units).get_total_time()
         tt["basic_punch"]=total
 
         values=self.time_taken_by_machine["basic+punch+cnc"].values()
-        total=round((sum(values)*units)/60,2)
+        # total=round((sum(values)*units)/60,2)
+        total = TimeCalculator(list(values), units).get_total_time()
         tt["basic_punch_cnc"]=total
 
         return tt
 
-
-
-
-
-        
 
 
     def calculate_assembly_time(self):
@@ -2563,28 +2180,22 @@ QFrame{
         glass_gazing=self.string_to_value("min",glass_g)
         curing_t=self.assembly_table.cellWidget(4,1).text().strip().lower().replace(" ","")
         curing_time=self.string_to_value("hour",curing_t)*60
-        # isomat_t=self.assembly_table.cellWidget(5,1).text().strip().lower().replace(" ","")
         
-
-        # if curing_time>60:
-        #     ct=round((curing_time/60),2)
-        #     curring=self.convert_to_hours(ct)
-        #     self.curing_time_le.setText(f":{curring} hours")
-        # else:
-        #     self.curing_time_le.setText(f":{curing_time} mins")
-        # self.curing_time_le.setText(f"{curing_time}")
         total_time=outer_frame_assm+vent_frame_assm+fitting_hardw+glass_gazing
         self.time_for_unit_cal=total_time
         self.a=f"{total_time:.1f}"
+        print("The assembly time is dfd",self.a)
         if total_time>60:
             total_time=round((total_time/60),2)
-            self.assemb_time=self.convert_to_hours_return_float(total_time)
-            total_time=self.convert_to_hours(total_time)
+            self.assemb_time=TimeConverter.convert_to_hours(total_time)
+            total_time=TimeConverter.convert_to_hours(total_time, return_string=True)
             self.assembly_time_le.setText(f"{total_time} hours")
         else:
             self.assembly_time_le.setText(f"{total_time} mins")
             t=round((total_time/60),2)
-            self.assemb_time=self.convert_to_hours_return_float(t)
+            print("The t is ",t)
+            self.assemb_time=TimeConverter.convert_to_hours(t)
+            print("The time is isiidfid ",self.assemb_time)
 
 
     def calculate_installation_time(self):
@@ -2597,7 +2208,7 @@ QFrame{
         tt=total_time
         if total_time>60:
             total_time=round((total_time/60),2)
-            total_time=self.convert_to_hours(total_time)
+            total_time=TimeConverter.convert_to_hours(total_time, return_string=True)
             self.installation_time_le.setText(f":{total_time} hours")
         else:
             self.installation_time_le.setText(f":{total_time} mins")
@@ -2610,19 +2221,14 @@ QFrame{
         material_handling=self.string_to_value("min",material_h)
         machine_setup=self.string_to_value("min",machine_set)
         total_time=material_handling
-        # if machine_setup>60:
-        #     st=round((machine_setup/60),2)
-        #     set_u=self.convert_to_hours(st)
-        #     self.setup_time_le.setText(f":{set_u} hours")
-        # else:
-        #     self.setup_time_le.setText(f":{machine_setup} mins")
+        
         
         self.handling_time=total_time
         self.setup_time=machine_setup
         t=total_time
         if total_time>60:
             total_time=round((total_time/60),2)
-            total_time=self.convert_to_hours(total_time)
+            total_time=TimeConverter.convert_to_hours(total_time, return_string=True)
             self.handling_time_le.setText(f"{total_time} hours")
         else:
             self.handling_time_le.setText(f"{total_time} mins")
@@ -2638,12 +2244,10 @@ QFrame{
         isomat_t=self.assembly_table.cellWidget(5,1).text().strip().lower().replace(" ","")
         isomat_t=self.string_to_value("min",isomat_t)
     
-        
-
         total_time_mins_2=machining_time+assembly_time+handling_time+curing_time+isomat_t
         if total_time_mins>60:
             t=round(total_time_mins/60,2)
-            total_time=self.convert_to_hours(t)
+            total_time=TimeConverter.convert_to_hours(t, return_string=True)
             txt=f"{total_time} hours"
             self.total_time_le.setText(txt)
         else:
@@ -2651,7 +2255,7 @@ QFrame{
             self.total_time_le.setText(txt)
         if total_time_mins_2>60:
             t=round(total_time_mins_2/60,2)
-            total_time=self.convert_to_hours(t)
+            total_time=TimeConverter.convert_to_hours(t, return_string=True)
             txt=f"{total_time} hours"
             self.total_time_le_2.setText(txt)
         else:
@@ -2671,57 +2275,31 @@ QFrame{
         except AttributeError:
             assembly_time=0
         
-        values=self.time_taken_by_machine["basic"].values()
+        values=self.time_taken_by_machine[BASIC].values()
         t=round(sum(values)/60,2)+handling_time+assembly_time
         total=round(t/60,2)
         units_per_week.append(int(48/total))
 
-        values=self.time_taken_by_machine["basic+cnc"].values()
+        values=self.time_taken_by_machine[BASIC_CNC].values()
         t=round(sum(values)/60,2)+handling_time+assembly_time
         total=round(t/60,2)
         units_per_week.append(int(48/total))
 
-        values=self.time_taken_by_machine["basic+punch"].values()
+        values=self.time_taken_by_machine[BASIC_PUNCH].values()
         t=round(sum(values)/60,2)+handling_time+assembly_time
         total=round(t/60,2)
         units_per_week.append(int(48/total))
 
-        values=self.time_taken_by_machine["basic+punch+cnc"].values()
+        values=self.time_taken_by_machine[BASIC_PUNCH_CNC].values()
         t=round(sum(values)/60,2)+handling_time+assembly_time
         total=round(t/60,2)
         units_per_week.append(int(48/total))
         return units_per_week
 
 
-
-        
-
-
-
-
-
-
-
-
-    def convert_to_hours_return_float(self,val):
-        v=float(val)
-        # if val>60:
-        #     v=round((val/60),2)
-        hours=int(v)
-        mins=round((v-hours)*60)
-        a=f"{hours}.{mins}"
-        print("a = ",a)
-        return float(a)
     
-    def convert_to_hours_return_string(self,val):
-        v=float(val)
-        # if val>60:
-        #     v=round((val/60),2)
-        hours=int(v)
-        mins=round((v-hours)*60)
-        a=f"{hours}.{mins}"
-        print("The a is ",a)
-        return a
+    
+    
         
     def string_to_value(self,pattern,val):
         try:
@@ -2750,14 +2328,9 @@ QFrame{
             return t if t else "0"
         except Exception as e:
             return "0"
-    def convert_to_hours(self,val):
-        # self.convert_hours(val)
-        v=float(val)
-        # if val>60:
-        #     v=round((val/60),2)
-        hours=int(v)
-        mins=round((v-hours)*60)
-        return f"{hours}.{mins}"
+        
+    
+    
     def convert_hours(self,val):
         input_hours=float(val)
         hours = int(input_hours)
@@ -2773,8 +2346,279 @@ QFrame{
         print("The converted hours is ",fixed_val)
         return f"{fixed_val}"
 
+
+class IconFactory:
+       def __init__(self,path):
+           self.path = path
+        
+       @lru_cache
+       def create_icon(self):
+            icon = QtGui.QIcon()
+            path = ResourcePathResolver(self.path).resource_path()
+            icon.addPixmap(QtGui.QPixmap(path), QtGui.QIcon.Mode.Normal, QtGui.QIcon.State.Off)
+            return icon
+       
+class ResourcePathResolver:
+    def __init__(self,relative_path: str):
+        self.relative_path = relative_path
+
+    def resource_path(self) -> str:
+        if getattr(sys, '_MEIPASS', False):
+                base_path = sys._MEIPASS
+        else:
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                project_root = os.path.abspath(os.path.join(current_dir, ".."))
+                base_path = os.path.join(project_root)
+        full_path = os.path.join(base_path, self.relative_path)
+        return full_path
+
+    
+class Icon(ABC):
+    @abstractmethod
+    def set_icon(self):
+        pass
+
+class WindowIcon(Icon):
+    def __init__(self, MyAppObj: MyApp):
+        self.MyAppObj = MyAppObj
+
+    def set_icon(self):
+        icon = IconFactory(WINDOW_ICON_PATH).create_icon()
+        self.MyAppObj.setWindowIcon(icon)
+
+class ButtonIconSetter(Icon):
+    def __init__(self,button,icon_path):
+        self.button = button
+        self.icon_path = icon_path
+
+    def set_icon(self):
+        icon = IconFactory(self.icon_path).create_icon()
+        self.button.setIcon(icon)
+
+class CompanyLogoIcon(Icon):
+    def __init__(self, MyAppObj: MyApp):
+        self.MyAppObj = MyAppObj
+
+    def set_icon(self):
+        pixmap = QtGui.QPixmap(ResourcePathResolver(COMPANY_LOGO_PATH).resource_path())
+        scaled_pixmap = pixmap.scaled(self.MyAppObj.company_logo.width(),self.MyAppObj.company_logo.height(), QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.SmoothTransformation)
+        self.MyAppObj.company_logo.setScaledContents(False)
+        self.MyAppObj.company_logo.setPixmap(scaled_pixmap)
+
+class TableComboManager:
+    pass
+
+class TimeConverter:
+    @staticmethod
+    def convert_to_hours(value: float, return_string = False) -> float:
+        value = float(value)
+        hours = int(value)
+        mins = round((value - hours) * 60)
+        converted_time_string = f"{hours}.{mins}"
+        if return_string:
+            return converted_time_string
+        return float(converted_time_string)
+
+
+class NonEditableCellManager:
+    def __init__(self, table):
+        self.table = table
+
+    def make_cells_non_editable(self):
+        for row in range(self.table.rowCount()):
+            for col in range(self.table.columnCount()):
+                cell_widget = self.table.cellWidget(row, col)
+                if not isinstance(cell_widget, (QComboBox, QLineEdit)):
+                    item =self.table.item(row, col)
+                    if item is None:
+                        item = QTableWidgetItem("")
+                        self.table.setItem(row, col, item)
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+
+class MachineManager:
+    def __init__(self,MyAppObj: MyApp):
+        self.__machine_counts = {
+            DOUBLE_MITER_SAW: int(MyAppObj.double_mitersaw_spinbox.value()),
+            COPY_ROUTER: int(MyAppObj.copyrouter_spinbox.value()),
+            DRILLING_MACHINE: int(MyAppObj.drilling_machine_spinbox.value()),
+            ENDMILL: int(MyAppObj.endmilling_spinbox.value()),
+            CNC: int(MyAppObj.cnc_spinbox.value()),
+            PUNCH: int(MyAppObj.punch_press_spinbox.value()),
+            CRIMPER: int(MyAppObj.coner_crimper_spinbox.value()),
+            SINGLE_MITER_SAW: int(MyAppObj.single_mitersaw_spinbox.value()),
+            NOTCHING_SAW: int(MyAppObj.notching_saw_spinbox.value())
+        }
+    
+    def get_machine_count(self, machine_name: str) -> int:
+        return self.__machine_counts.get(machine_name, 1)
+    
+    def modify_machine_times(self, time_taken_by_machine: dict, original_machine_times: dict):
+        print("The time taken by combination of machines is ",original_machine_times.get(BASIC))
+        for combo_type, machines in original_machine_times.items():
+            for machine, time in machines.items():
+                count = self.get_machine_count(machine)
+                if count > 0:
+                    adjusted_time = round(time / count, 2)
+                else:
+                    adjusted_time = time  # Avoid division by zero; could log warning if needed
+                time_taken_by_machine[combo_type][machine] = adjusted_time
+
+class MachineTimeFormatter:
+    def __init__(self, machine_time_data: dict):
+        self.__machine_time_data = machine_time_data
+
+    def get_times_in_mins(self):
+        mahchine_labels = list(self.__machine_time_data.keys())
+        time_in_minutes = [round(t / 60,2) for t in self.__machine_time_data.values()]
+        return mahchine_labels, time_in_minutes
+
+class ButtonStateManager:
+    def __init__(self, buttons: list):
+        self.buttons = buttons
+
+    def set_all_checked(self, checked: bool = True):
+        for btn in self.buttons:
+            btn.setChecked(checked)
+
+class CalculateWeeklyUnits:
+    def __init__(self, time_values: list, total_minutes: int = 2880):
+        self.__time_values = time_values
+        self.__total_minutes = total_minutes
+
+    def calculate_units(self):
+        units_per_week = [int(self.__total_minutes/t) for t in self.__time_values]
+        return units_per_week
+    
+class UnitStatistics:
+    @staticmethod
+    def get_min(units: list) -> int:
+        return min(units) if units else 0
+    
+    @staticmethod
+    def get_max(units: list) -> int:
+        return max(units) if units else 0
+    
+class TreeMapLabelFormatter:
+    @staticmethod
+    def format(labels: list, units: list) -> list:
+        return [f"{labels[i]}\n{units[i]} units" for i in range(len(labels))] if labels and units else []
+    
+class ChartPlotManager:
+    def __init__(self, parent, canvas, units_per_week, treemap_labels, chart_type):
+        self.parent = parent
+        self.canvas = canvas
+        self.units_per_week = units_per_week
+        self.treemap_labels = treemap_labels
+        self.chart_type = chart_type
+
+    def plot_all_charts(self):
+        self.parent.plot_data(self.chart_type,self.units_per_week,self.treemap_labels)
+        self.parent.plot_units_per_shift(self.chart_type)
+        self.parent.total_machining_time()
+        self.parent.plot_units_per_week_treemap()
+        self.parent.plot_cost_per_unit(self.chart_type.lower())
+        self.parent.plot_machine_usage(self.chart_type.lower())
+        self.parent.plot_time_consumption(self.chart_type.lower())
+        self.parent.plot_idle_hours(self.chart_type.lower())
+        self.parent.total_assembly_time()
+
+class GetData:
+    def __init__(self,parent: MyApp):
+        self.parent=parent
+
+    def get_units(self) -> int:
+        return int(self.parent.unit_le.text())
+    
+class TimeCalculator:
+    def __init__(self,values: list, units: int):
+        self.values = values
+        self.units = units
+
+    def get_total_time(self, mins: int = 60) -> float:
+        total_time = round((sum(self.values) * self.units) / mins, 2)
+        return total_time
+        
+class TotalTimeCalculator:
+    def __init__(self,machine_time_data: dict, units: int):
+        self.machine_time_data = machine_time_data
+        self.units = units
+
+    def get_all_totals(self) -> dict:
+        total_times = {}
+        for combo_name, time_values in self.machine_time_data.items():
+            total = TimeCalculator(list(time_values.values()), self.units).get_total_time()
+            # Replace '+' with '_' to match original keys
+            key = combo_name.replace('+','_')
+            total_times[key] = total
+        return total_times
+    
+class MachiningTimeManager:
+    def __init__(self, machine_time_store: dict):
+        self.__machine_time_store = machine_time_store
+
+    def set_time_for_type(self, combo_type:str, time_data: dict):
+        self.__machine_time_store[combo_type] = copy.deepcopy(time_data)
+
+    def get_time_data(self, combo_type: str) -> dict:
+        return self.__machine_time_store.get(combo_type, {})
+    
+
+class TableDataCleaner:
+    def __init__(self, table, skip_description_row = True):
+        self.table = table
+        self.skip_description_row = skip_description_row
+
+    def clear(self):
+        for row in range(self.table.rowCount()):
+            for col in range(self.table.columnCount()):
+                if self.skip_description_row and row == SKIP_DESCRIPTION_ROW:
+                    continue
+                self.__clear_cell(row, col)
+
+    def __clear_cell(self, row, col):
+        cell_widget = self.table.cellWidget(row, col)
+
+        if isinstance(cell_widget, QComboBox):
+            if cell_widget.count() > 0:
+                cell_widget.setCurrentIndex(0)
+        elif isinstance(cell_widget, QLineEdit):
+            cell_widget.setText("") 
+        item = self.table.item(row, col)
+        if item and col > 0:
+            default_text = "" 
+            item.setText(default_text)
+
+class LineEditCleaner:
+    def __init__(self, line_edits: list):
+        self.line_edits = line_edits
+
+    def clear(self, default="0"):
+        for le in self.line_edits:
+            le.setText(default)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         
 
+
+    
+
+        
+        
 
 
     

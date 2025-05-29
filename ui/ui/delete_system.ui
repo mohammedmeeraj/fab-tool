@@ -15,7 +15,7 @@
   </property>
   <property name="styleSheet">
    <string notr="true">QWidget{
-background-color: #9b9890;
+background-color: #b2e580;
 }</string>
   </property>
   <layout class="QGridLayout" name="gridLayout" rowstretch="0,1">
@@ -36,9 +36,9 @@ background-color: #9b9890;
      <property name="styleSheet">
       <string notr="true">QWidget{
 
-	background-color: #706c61;
+	background-color: #65ca00;
 padding:4px;
-color:#fff;
+color:#444;
 }</string>
      </property>
      <layout class="QVBoxLayout" name="verticalLayout_2">
@@ -81,15 +81,15 @@ border-radius: 2px;
 }
 QComboBox:focus{
 
- border: 1px solid #706c61;
+ border: 1px solid #65ca00;
             background-color: #fff;
 
 }
 QPushButton{
 
 border:none;
-background-color:#706c61;
-color:#fff;
+background-color:#65ca00;
+color:#444;
 border-radius:2px;
 padding:6px;
 
@@ -97,7 +97,7 @@ padding:6px;
 }
 QPushButton:hover{
 background-color:#fff;
-border:1px solid #706c61;
+border:1px solid #65ca00;
 color:#000;
 
 

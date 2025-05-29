@@ -14,7 +14,7 @@ class Ui_Dialog(object):
         Dialog.setObjectName("Dialog")
         Dialog.resize(400, 182)
         Dialog.setStyleSheet("QWidget{\n"
-"background-color: #9b9890;\n"
+"background-color: #b2e580;\n"
 "}")
         self.gridLayout = QtWidgets.QGridLayout(Dialog)
         self.gridLayout.setContentsMargins(0, 0, 0, 0)
@@ -22,9 +22,9 @@ class Ui_Dialog(object):
         self.widget = QtWidgets.QWidget(parent=Dialog)
         self.widget.setStyleSheet("QWidget{\n"
 "\n"
-"    background-color: #706c61;\n"
+"    background-color: #65ca00;\n"
 "padding:4px;\n"
-"color:#fff;\n"
+"color:#444;\n"
 "}")
         self.widget.setObjectName("widget")
         self.verticalLayout_2 = QtWidgets.QVBoxLayout(self.widget)
@@ -54,15 +54,15 @@ class Ui_Dialog(object):
 "}\n"
 "QComboBox:focus{\n"
 "\n"
-" border: 1px solid #706c61;\n"
+" border: 1px solid #65ca00;\n"
 "            background-color: #fff;\n"
 "\n"
 "}\n"
 "QPushButton{\n"
 "\n"
 "border:none;\n"
-"background-color:#706c61;\n"
-"color:#fff;\n"
+"background-color:#65ca00;\n"
+"color:#444;\n"
 "border-radius:2px;\n"
 "padding:6px;\n"
 "\n"
@@ -70,7 +70,7 @@ class Ui_Dialog(object):
 "}\n"
 "QPushButton:hover{\n"
 "background-color:#fff;\n"
-"border:1px solid #706c61;\n"
+"border:1px solid #65ca00;\n"
 "color:#000;\n"
 "\n"
 "\n"
