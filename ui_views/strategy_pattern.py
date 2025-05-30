@@ -21,7 +21,7 @@ class PayPal(PaymentStrategy):
 
 class PaymentProccessor:
     def __init__(self,startegy:PaymentStrategy):
-        self.set_Strategy=startegy
+        self.set_Strategy = startegy
 
     def setStrategy(self,strategy:PaymentStrategy):
         self.set_Strategy=strategy

@@ -14,10 +14,8 @@ import matplotlib.cm as cm
 # import plotly.express as px   
 # from PyQt6.QtWebEngineWidgets import QWebEngineView
 from .line_production import MplCanvas
-from .report import MplCanvasReports
 import squarify,mplcursors
 from matplotlib.widgets import Cursor
-from .idle_hours import MplCanvasIdle
 import matplotlib.pyplot as plt
 from abc import ABC, abstractmethod
 from functools import lru_cache
@@ -43,8 +41,6 @@ class MyApp(QtWidgets.QMainWindow, Ui_MainWindow):
         self.stackedWidget.setCurrentIndex(0)
         self.machining_table.horizontalHeader().setVisible(True)
         self.apply_shadow([self.widget_7,self.widget_8])
-        # self.apply_shadow([self.company_logo])
-        # self.add_placeholder_machining_table()
         self.set_section_size_table(50)
         self.stretch_table_columns()
         self.machining_table.hideRow(0)
@@ -1165,22 +1161,16 @@ QFrame{
        
         
 
-    def plot_data(self, machining_type,data=None,labels=None):
+    def plot_line_production_treemap(self, machining_type,data=None,labels=None):
         """Plot initial or updated data"""
       
         self.canvas.fig.clear()
         self.canvas.axes1 = self.canvas.fig.add_subplot(121)
         normed_data = squarify.normalize_sizes(data, 100, 100)
-    
-    # Plot the treemap
-        # wrapped_labels = [textwrap.fill(label, width=10) for label in labels]
-        # colors=["#cccccc","#7b838a","#7a7d7d","#333333","#a2999e"]
-        # colors=cm.viridis_r([i / len(normed_data) for i in range(len(normed_data))])
         log_sizes = np.log1p(normed_data)
         squarify.plot(sizes=log_sizes, label=labels, ax=self.canvas.axes1, alpha=0.7,edgecolor="white", linewidth=2)
         self.canvas.axes1.set_title(f"Line Production {machining_type} (48 Hours)")
         self.canvas.axes1.axis("off")  # Hide axes
-        
         self.canvas.draw_idle()
     
     def plot_units_per_shift(self,machining_type):
@@ -1345,7 +1335,7 @@ QFrame{
             layout=QVBoxLayout(self.time_consumption_widget)
             layout.setContentsMargins(60, 0, 0, 0)
         if not hasattr(self,"canvas3"):
-            self.canvas3=MplCanvasIdle(self,width=6,height=3,dpi=80)
+            self.canvas3=MplCanvas(self,width=6,height=3,dpi=80, subplot_spec=(1, 1), name="idle_canvas")
             layout.addWidget(self.canvas3)
         self.canvas3.fig.clear()
         self.canvas3.axes1=self.canvas3.fig.add_subplot(111)
@@ -1405,7 +1395,7 @@ QFrame{
         if layout is None:
             layout=QVBoxLayout(self.results_page_widget)
         if not hasattr(self,"canvas2"):
-            self.canvas2=MplCanvasReports(self,width=5,height=4,dpi=100)
+            self.canvas2=MplCanvas(self,width=5,height=4,dpi=100, subplot_spec=(2, 2), name="reports_canvas")
             layout.addWidget(self.canvas2)
         self.canvas2.fig.clear()
         self.canvas2.axes1=self.canvas2.fig.add_subplot(221)
@@ -1593,7 +1583,7 @@ QFrame{
 
 
     def plot_time_consumption(self,combination_type):
-        units=int(self.unit_le.text())
+        units=GetData(self).get_units()
         machine_labels,machine_time=self.get_machine_time_for_pie(combination_type)
         update_time_list=[]
         for i in range(len(machine_time)):
@@ -1611,8 +1601,6 @@ QFrame{
             time_taken_by_each_machine.append(f"{machine_labels[i]}: {updated_time}")
         self.canvas2.axes4=self.canvas2.fig.add_subplot(224)
         header=f"Time consumption for {units} unit"
-        # text_content=""
-        # text_content=header+"\n"+"-"*(len(header)*2)+"\n\n"
         system_name=self.system_combo.currentText()
         type_name=self.type_combo.currentText()
         size=self.size_le.text()
@@ -1700,8 +1688,11 @@ QFrame{
         if layout is None:
             layout = QVBoxLayout(self.line_production_widget)
         if not hasattr(self, "canvas"):
-            self.canvas = MplCanvas(self, width=5, height=4, dpi=100)
+            self.canvas = MplCanvas(self, subplot_spec=(1, 2), name="line_canvas")
             layout.addWidget(self.canvas)
+
+        # self.canvas_manager = CanvasManager(self, self.line_production_widget)
+        # self.canvas = self.canvas_manager.ensure_layout_and_canvas()
 
         # Plot charts
         ChartPlotManager(self, self.canvas, units_per_week, treemap_labels, chart_title).plot_all_charts()
@@ -2512,7 +2503,7 @@ class ChartPlotManager:
         self.chart_type = chart_type
 
     def plot_all_charts(self):
-        self.parent.plot_data(self.chart_type,self.units_per_week,self.treemap_labels)
+        self.parent.plot_line_production_treemap(self.chart_type,self.units_per_week,self.treemap_labels)
         self.parent.plot_units_per_shift(self.chart_type)
         self.parent.total_machining_time()
         self.parent.plot_units_per_week_treemap()
@@ -2521,6 +2512,25 @@ class ChartPlotManager:
         self.parent.plot_time_consumption(self.chart_type.lower())
         self.parent.plot_idle_hours(self.chart_type.lower())
         self.parent.total_assembly_time()
+
+class CanvasManager:
+    def __init__(self, parent, parent_widget, canvas_class = MplCanvas, width = 5, height =4, dpi = 100):
+        self.__parent = parent
+        self.__parent_widget = parent_widget
+        self.__canvas_class = canvas_class
+        self.__width = width
+        self.__height = height
+        self.__dpi = dpi
+        self.__canvas = None
+
+    def ensure_layout_and_canvas(self):
+        layout = self.__parent_widget.layout()
+        if layout is None:
+            layout = QVBoxLayout(self.__parent_widget)
+        if not hasattr(self.__parent, "canvas"):
+            self.__canvas = self.__canvas_class(self.__parent, width=self.__width, height=self.__height, dpi=self.__dpi)
+            layout.addWidget(self.__canvas)
+        return self.__canvas
 
 class GetData:
     def __init__(self,parent: MyApp):
@@ -2562,7 +2572,6 @@ class MachiningTimeManager:
     def get_time_data(self, combo_type: str) -> dict:
         return self.__machine_time_store.get(combo_type, {})
     
-
 class TableDataCleaner:
     def __init__(self, table, skip_description_row = True):
         self.table = table
